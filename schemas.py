@@ -58,6 +58,7 @@ class StepInfoModel(BaseModel):
     correct_action: ActionLiteral
     agent_action: ActionLiteral
     confidence: float = Field(ge=0.0, le=1.0)
+    agent_reasoning: Optional[Dict[str, str]] = None
     escalated: bool
     reward: float = Field(ge=-1.5, le=1.1)
     is_correct: bool

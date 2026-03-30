@@ -61,15 +61,19 @@ COPY pyproject.toml          .
 COPY uv.lock                 .
 COPY openenv.yaml            .
 COPY requirements.txt        .
+COPY Dockerfile              .
 COPY validate_submission.py  .
 COPY README.md               .
 COPY LICENSE                 .
 COPY server                  ./server
+COPY scripts                 ./scripts
 
 # ── Copy pre-trained checkpoint (if present) ──────────────────────────────────
 # This lets judges evaluate immediately without re-training.
 # Falls back gracefully if file is absent.
 COPY ppo_final.npz           ./ppo_final.npz
+COPY ppo_checkpoint_best.npz ./ppo_checkpoint_best.npz
+COPY ppo_checkpoint_final.npz ./ppo_checkpoint_final.npz
 
 # ── Runtime secrets (override at launch; no defaults baked in) ───────────────
 # Gradio demo auto-detects LLM availability from HF_TOKEN.

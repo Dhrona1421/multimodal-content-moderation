@@ -15,6 +15,7 @@ import json
 import os
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import gradio as gr
@@ -48,6 +49,12 @@ TAG_ICON  = {"safe":"✅","nudity":"🔞","violence":"⚔️","drugs":"💊","mi
 USER_ICON = {"new":"🆕","trusted":"⭐","suspicious":"🚨"}
 DIFF_ICON = {"easy":"🟢","medium":"🟡","hard":"🔴"}
 
+PPO_CHECKPOINT_CANDIDATES = (
+    "ppo_checkpoint_best",
+    "ppo_final",
+    "ppo_checkpoint_final",
+)
+
 ENV_NAME = "multimodal-content-moderation"
 ENV_TITLE = "Multimodal Content Moderation"
 ENV_DESCRIPTION = (
@@ -61,6 +68,27 @@ UI_CSS = """
   .gradio-container { max-width:900px!important; margin:auto }
   footer { display:none!important }
 """
+
+
+def _load_pretrained_ppo_agent():
+    from network import ActorCriticNetwork
+    from train import make_ppo_agent
+
+    last_error: Exception | None = None
+    for checkpoint in PPO_CHECKPOINT_CANDIDATES:
+        if not Path(f"{checkpoint}.npz").exists():
+            continue
+        net = ActorCriticNetwork()
+        try:
+            net.load(checkpoint)
+            return make_ppo_agent(net)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+
+    expected = ", ".join(f"{name}.npz" for name in PPO_CHECKPOINT_CANDIDATES)
+    if last_error is not None:
+        raise RuntimeError(f"failed to load PPO checkpoint ({last_error})") from last_error
+    raise FileNotFoundError(f"no PPO checkpoint found; expected one of: {expected}")
 
 
 class ResetRequest(BaseModel):
@@ -146,12 +174,23 @@ def _result_card(info: Dict) -> str:
     reward    = info.get("reward",         0.0)
     escalated = info.get("escalated",      False)
     is_right  = info.get("is_correct",     False)
+    reasoning = info.get("agent_reasoning", {}) or {}
+    
     icon = "✅" if is_right else ("↗️" if escalated else "❌")
     label = "Correct!" if is_right else ("Escalated to human" if escalated else "Wrong")
     ac = C.get(agent_act, "#gray")
     cc = C.get(correct,   "#gray")
     reward_pct = int(max(0, min(100, (reward + 1.5) / 2.6 * 100)))
     bar_col = "#22c55e" if reward > 0 else ("#f59e0b" if reward == 0 else "#ef4444")
+    
+    reasoning_html = ""
+    if reasoning:
+        reasoning_html = "<div style='margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.82em'>"
+        for k, v in reasoning.items():
+            k_fmt = k.replace("_", " ").title()
+            reasoning_html += f"<div style='background:#f1f5f9;padding:6px 10px;border-radius:6px'><strong>{k_fmt}:</strong> {v}</div>"
+        reasoning_html += "</div>"
+
     return f"""
 <div style="border:1px solid #d1d5db;border-radius:14px;padding:18px;
             background:#f8fafc;max-width:760px;margin-top:10px;font-family:sans-serif">
@@ -166,9 +205,10 @@ def _result_card(info: Dict) -> str:
     <div style="background:{bar_col};width:{reward_pct}%;height:100%;
                 border-radius:20px;transition:width 0.3s"></div>
   </div>
+  {reasoning_html}
   <div style="background:#fff;border-left:4px solid {cc};padding:10px 14px;
-              border-radius:0 8px 8px 0;font-size:0.91em;color:#374151">
-    <strong>📋 Why:</strong> {info.get("reason","")}
+              border-radius:0 8px 8px 0;font-size:0.91em;color:#374151;margin-top:10px">
+    <strong>📋 Ground Truth Why:</strong> {info.get("reason","")}
   </div>
 </div>"""
 
@@ -354,57 +394,59 @@ def run_autopilot(task: str, agent_name: str) -> str:
         agent_label = f"LLM ({os.environ.get('MODEL_NAME','gpt-4o-mini')})"
     elif agent_name == "PPO Agent":
         try:
-            from network import ActorCriticNetwork
-            from train   import make_ppo_agent
-            from features import extract_features
-            net = ActorCriticNetwork()
-            net.load("ppo_checkpoint_best")
-            agent_fn    = make_ppo_agent(net)
+            agent_fn    = _load_pretrained_ppo_agent()
             agent_label = "PPO Agent (trained)"
         except Exception as e:
             agent_fn    = rule_based_agent
             agent_label = f"Rule-Based (PPO load failed: {e})"
 
-    grader = ModerationGrader()
-    data   = grader.grade_single_task(task, agent_fn)
+    env = make_task(task)
+    obs = env.reset()
+    history = []
+    
+    for _ in range(env.max_steps):
+        res = agent_fn(obs)
+        act, conf = res[0], res[1]
+        reasoning = res[2] if len(res) > 2 else {}
+        
+        obs, reward, done, info = env.step({
+            "action": act,
+            "confidence": conf,
+            "agent_reasoning": reasoning
+        })
+        history.append(info)
+        if done: break
 
-    cm     = np.array(data["confusion_matrix"])
-    clf    = data["classification"]
-
-    # Build confusion matrix HTML
-    cm_html = "<table style='border-collapse:collapse;font-size:0.84em;margin:8px 0'>"
-    cm_html += "<tr><td></td>" + "".join(
-        f"<th style='padding:6px 12px;background:#f3f4f6'>pred:{a}</th>"
-        for a in ACTIONS
-    ) + "</tr>"
-    for i, a in enumerate(ACTIONS):
-        cm_html += f"<tr><th style='padding:6px 12px;background:#f3f4f6'>true:{a}</th>"
-        for j in range(len(ACTIONS)):
-            bg = "#dcfce7" if i == j else ("#fee2e2" if cm[i,j] > 0 else "#fff")
-            cm_html += f"<td style='padding:6px 12px;text-align:center;background:{bg};border:1px solid #e5e7eb'>{cm[i,j]}</td>"
-        cm_html += "</tr>"
-    cm_html += "</table>"
-
+    # Detailed metrics
+    correct_count = sum(1 for h in history if h["is_correct"])
+    steps = len(history)
+    acc = correct_count / steps
+    
     # Step rows
     rows = ""
-    for r in data["step_results"]:
+    for r in history:
         icon = "✅" if r["is_correct"] else ("↗️" if r["escalated"] else "❌")
         ac   = C.get(r["agent_action"],   "#gray")
         cc   = C.get(r["correct_action"], "#gray")
+        
+        # Format reasoning as compact text
+        reason_txt = ""
+        if r.get("agent_reasoning"):
+            reason_txt = "<br>".join([f"<b>{k.split('_')[0].title()}:</b> {v}" for k,v in r["agent_reasoning"].items()])
+
         rows += (
             f"<tr style='border-bottom:1px solid #f3f4f6'>"
-            f"<td style='padding:6px 8px'>{r['step']}</td>"
-            f"<td style='padding:6px 8px'>{icon}</td>"
-            f"<td style='padding:6px 8px;font-size:0.83em;max-width:280px'>{r['reason'][:65]}…</td>"
-            f"<td style='padding:6px 8px;color:{ac}'><strong>{r['agent_action'].upper()}</strong></td>"
-            f"<td style='padding:6px 8px;color:{cc}'>{r['correct_action'].upper()}</td>"
-            f"<td style='padding:6px 8px'>{r['reward']:+.3f}</td>"
-            f"<td style='padding:6px 8px'>{r['confidence']:.2f}</td>"
-            f"<td style='padding:6px 8px'>{TAG_ICON.get(r['image_tag'],'')} {r['image_tag']}</td>"
+            f"<td style='padding:8px'>{r['post_id']}</td>"
+            f"<td style='padding:8px'>{icon}</td>"
+            f"<td style='padding:8px;font-size:0.83em;max-width:320px'>{reason_txt if reason_txt else r['reason']}</td>"
+            f"<td style='padding:8px;color:{ac}'><strong>{r['agent_action'].upper()}</strong></td>"
+            f"<td style='padding:8px;color:{cc}'>{r['correct_action'].upper()}</td>"
+            f"<td style='padding:8px'>{r['reward']:+.3f}</td>"
+            f"<td style='padding:8px'>{r['confidence']:.2f}</td>"
             f"</tr>"
         )
 
-    score = data["score"]
+    score = env.compute_score()
     col   = "#22c55e" if score >= 0.75 else ("#f59e0b" if score >= 0.5 else "#ef4444")
     return f"""
 <div style="font-family:sans-serif;max-width:860px">
@@ -414,25 +456,18 @@ def run_autopilot(task: str, agent_name: str) -> str:
     <div style="font-size:1.7em;font-weight:700">{score:.1%}</div>
   </div>
   <div style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:16px;font-size:0.9em">
-    <span>✓ Correct: {data["correct"]}/{data["steps"]}</span>
-    <span>📊 Accuracy: {data["accuracy"]:.0%}</span>
-    <span>🎯 Macro-F1: {clf["macro_f1"]:.3f}</span>
-    <span>📏 ECE: {data["ece"]:.4f}</span>
-    <span>⚠️ FNR: {data["fnr_high_risk"]:.4f}</span>
-    <span>⚖️ Fairness gap: {data["fairness_gap"]:.4f}</span>
+    <span>✓ Correct: {correct_count}/{steps}</span>
+    <span>📊 Accuracy: {acc:.0%}</span>
   </div>
-  <details open><summary style="cursor:pointer;font-weight:600;margin-bottom:8px">
-    Confusion Matrix</summary>{cm_html}</details>
   <table style="width:100%;border-collapse:collapse;font-size:0.86em;margin-top:12px">
     <thead><tr style="background:#f3f4f6;font-weight:600">
       <th style="padding:8px;text-align:left">#</th>
       <th style="padding:8px;text-align:left"></th>
-      <th style="padding:8px;text-align:left">Reason</th>
+      <th style="padding:8px;text-align:left">Agent Logic / Reasoning</th>
       <th style="padding:8px;text-align:left">Agent</th>
       <th style="padding:8px;text-align:left">Correct</th>
       <th style="padding:8px;text-align:left">Reward</th>
       <th style="padding:8px;text-align:left">Conf.</th>
-      <th style="padding:8px;text-align:left">Image</th>
     </tr></thead>
     <tbody>{rows}</tbody>
   </table>
@@ -652,11 +687,7 @@ def run_leaderboard() -> tuple:
 
     # Try loading PPO checkpoint
     try:
-        from network import ActorCriticNetwork
-        from train   import make_ppo_agent
-        net = ActorCriticNetwork()
-        net.load("ppo_checkpoint_best")
-        agents["PPO Agent"] = make_ppo_agent(net)
+        agents["PPO Agent"] = _load_pretrained_ppo_agent()
     except Exception:
         pass
 

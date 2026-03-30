@@ -174,7 +174,7 @@ class ContentModerationEnv:
 
         Args:
             action: canonical OpenEnv action payload, for example
-                    {"action": "flag", "confidence": 0.8}.
+                    {"action": "flag", "confidence": 0.8, "agent_reasoning": {...}}.
                     Legacy string actions are still accepted for backwards
                     compatibility.
 
@@ -186,6 +186,10 @@ class ContentModerationEnv:
         action_model = self._coerce_action(action)
         action = action_model.action
         confidence = action_model.confidence
+        agent_reasoning = getattr(action_model, "agent_reasoning", None)
+        if agent_reasoning is None and isinstance(action, dict):
+            agent_reasoning = action.get("agent_reasoning")
+
         post       = self.episode_posts[self.current_step]
         correct    = post["correct_action"]
         image_tag  = post["image_tag"]
@@ -223,6 +227,7 @@ class ContentModerationEnv:
             "correct_action": correct,
             "agent_action":   action,
             "confidence":     confidence,
+            "agent_reasoning": agent_reasoning,
             "escalated":      escalated,
             "reward":         reward,
             "is_correct":     is_correct,
@@ -242,7 +247,8 @@ class ContentModerationEnv:
             info["episode_reward"] = round(sum(self.episode_rewards), 4)
             info["episode_score"]  = self.compute_score()
             info["episode_metrics"] = self._compute_episode_metrics()
-            next_obs = {}
+            # Return current obs even on done for spec-strictness
+            next_obs = self._build_obs(self.current_step - 1)
         else:
             next_obs = self._build_obs(self.current_step)
 
@@ -337,10 +343,7 @@ class ContentModerationEnv:
         action: Union[str, Dict[str, Any], ActionModel],
     ) -> ActionModel:
         if isinstance(action, ActionModel):
-            return ActionModel(
-                action=action.action,
-                confidence=float(np.clip(action.confidence, 0.0, 1.0)),
-            )
+            return action
         if isinstance(action, dict):
             payload = dict(action)
             payload["confidence"] = float(np.clip(payload.get("confidence", 1.0), 0.0, 1.0))

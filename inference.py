@@ -168,6 +168,18 @@ def format_observation(obs: Dict[str, Any]) -> str:
 # LLM agent
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _clean_json(text: str) -> str:
+    """Extract and clean a JSON block from potentially messy LLM output."""
+    # 1. Strip markdown code fences (```json or ```)
+    text = re.sub(r"```(?:json)?", "", text)
+    text = re.sub(r"```", "", text)
+    # 2. Extract anything between the first { and the last }
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if match:
+        return match.group(0).strip()
+    return text.strip()
+
+
 def llm_agent(
     obs: Dict[str, Any],
     max_retries: int = 3,
@@ -187,29 +199,31 @@ def llm_agent(
                     {"role": "user",   "content": format_observation(obs)},
                 ],
                 temperature=0.0,
-                max_tokens=350,
+                max_tokens=450,
             )
-            raw    = resp.choices[0].message.content.strip()
-            raw    = re.sub(r"```json|```", "", raw).strip()
-            parsed = json.loads(raw)
+            raw = resp.choices[0].message.content or ""
+            clean = _clean_json(raw)
+            parsed = json.loads(clean)
+action = str(parsed.get("action", "flag")).lower().strip()
+confidence = float(parsed.get("confidence", 0.75))
+reasoning = parsed.get("reasoning", {})
 
-            action     = str(parsed.get("action", "flag")).lower().strip()
-            confidence = float(parsed.get("confidence", 0.75))
+if action not in ACTIONS:
+    action = "flag"
+confidence = float(max(0.0, min(1.0, confidence)))
+return action, confidence, reasoning
 
-            if action not in ACTIONS:
-                action = "flag"
-            confidence = float(max(0.0, min(1.0, confidence)))
-            return action, confidence
+except Exception as exc:
+wait = 1 + (attempt * 2)
+print(f"  [LLM] Attempt {attempt+1} failed: {exc}. Retrying in {wait}s...",
+      file=sys.stderr)
+time.sleep(wait)
 
-        except Exception as exc:
-            wait = 2 ** attempt
-            print(f"  [LLM] Attempt {attempt+1} failed: {exc}. Retrying in {wait}s…",
-                  file=sys.stderr)
-            time.sleep(wait)
-
-    return rule_based_agent(obs)
+a, c = rule_based_agent(obs)
+return a, c, {"final_logic": "Fallback to deterministic rules"}
 
 
+def rule_based_agent(obs: Dict[str, Any]) -> Tuple[str, float]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Rule-based agent  (deterministic, no API)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -225,12 +239,12 @@ def _phrase_hit(text: str, group: str) -> bool:
     return any(p in text for p in BIGRAM_SIGNALS.get(group, []))
 
 
-def rule_based_agent(obs: Dict[str, Any]) -> Tuple[str, float]:
+def rule_based_agent(obs: Dict[str, Any]) -> Tuple[str, float, Dict[str, str]]:
     """
     Deterministic rule-based agent using weighted keyword scoring
     and cross-modal conflict resolution.
 
-    Returns (action, confidence).
+    Returns (action, confidence, reasoning_dict).
     """
     image   = obs.get("image_tag",    "safe")
     user    = obs.get("user_type",    "new")
@@ -265,63 +279,65 @@ def rule_based_agent(obs: Dict[str, Any]) -> Tuple[str, float]:
 
     # 1. Absolute removes — image-driven, regardless of text/user
     if image == "nudity":
-        return "remove", 0.97
+        return "remove", 0.97, {"image_signal": "Nudity tag requires immediate takedown."}
 
     if credible_threat:
-        return "remove", 0.95
+        return "remove", 0.95, {"text_signal": "Credible threat detected in caption."}
 
     if image == "drugs" and spam_s > 0.4 * trust_factor:
-        return "remove", round(min(0.85 + spam_s * 0.1, 0.97), 3)
+        conf = round(min(0.85 + spam_s * 0.1, 0.97), 3)
+        return "remove", conf, {"cross_modal": "Drug image combined with pharmaceutical sales text."}
 
     if spam_s > 0.55 * trust_factor and user != "trusted":
-        conf = min(0.82 + spam_s * 0.1, 0.97)
-        return "remove", round(conf, 3)
+        conf = round(min(0.82 + spam_s * 0.1, 0.97), 3)
+        return "remove", conf, {"text_signal": "High spam score detected for non-trusted user."}
 
     if fraud_s > 0.5 and image in ("safe", "misleading"):
-        return "remove" if user == "suspicious" else "flag", round(0.85, 3)
+        act = "remove" if user == "suspicious" else "flag"
+        return act, 0.85, {"text_signal": f"Financial fraud indicators ({fraud_s:.2f}) lead to {act}."}
 
     # 2. Remove on high harm text + suspicious
     if user == "suspicious" and hist_factor > 1.3:
         if hate_s > 0.3 or viol_s > 0.3:
-            return "remove", round(min(0.72 + hist_factor * 0.05, 0.90), 3)
+            conf = round(min(0.72 + hist_factor * 0.05, 0.90), 3)
+            return "remove", conf, {"user_signal": "Suspicious user with harmful text history."}
 
     # 3. Flag — image-driven
     if image == "misleading":
         if authoritative and edu_s > 0.2:
-            # agent actively debunking misinformation
-            return "allow", 0.75
+            return "allow", 0.75, {"final_logic": "Agent actively debunking misinformation."}
         conf = 0.80 if user != "trusted" else 0.72
-        return "flag", round(conf * trust_factor, 3)
+        return "flag", round(conf * trust_factor, 3), {"image_signal": "Misleading image tag requires review."}
 
     if image == "violence":
         sports = ["boxing", "mma", "ufc", "wrestling", "match", "fight night",
                   "professional", "tournament"]
         if any(k in text for k in sports) and edu_s > 0.1:
-            return "allow", 0.76
-        return "flag", round(0.79 * trust_factor, 3)
+            return "allow", 0.76, {"final_logic": "Content recognized as professional sports."}
+        return "flag", round(0.79 * trust_factor, 3), {"image_signal": "Violent image tag requires review."}
 
     if image == "drugs":
         if edu_s > 0.3 and user == "trusted":
-            # medical / educational drug content
-            return "allow", 0.80
-        return "flag", round(0.76 * trust_factor, 3)
+            return "allow", 0.80, {"final_logic": "Medical/educational drug content from trusted user."}
+        return "flag", round(0.76 * trust_factor, 3), {"image_signal": "Drug image tag requires review."}
 
     # 4. Flag — text-driven
     weighted_hate = hate_s * trust_factor * hist_factor
     if weighted_hate > 0.25:
-        return "flag", round(min(0.65 + weighted_hate * 0.2, 0.90), 3)
+        conf = round(min(0.65 + weighted_hate * 0.2, 0.90), 3)
+        return "flag", conf, {"text_signal": "Hate speech indicators above threshold."}
 
     if misinfo_s > 0.35:
-        return "flag", round(0.74 * trust_factor, 3)
+        return "flag", round(0.74 * trust_factor, 3), {"text_signal": "Misinformation indicators detected."}
 
     if harm_s > 0.3:
-        return "flag", round(0.78, 3)
+        return "flag", 0.78, {"text_signal": "Self-harm indicators detected."}
 
     if drug_s > 0.4:
-        return "flag", round(0.72 * trust_factor, 3)
+        return "flag", round(0.72 * trust_factor, 3), {"text_signal": "Drug-related keywords detected."}
 
     if coded_sales and user != "trusted":
-        return "flag", round(0.68 * trust_factor * hist_factor, 3)
+        return "flag", round(0.68 * trust_factor * hist_factor, 3), {"text_signal": "Coded trafficking language detected."}
 
     # 5. Allow
     if image == "safe":
@@ -330,17 +346,14 @@ def rule_based_agent(obs: Dict[str, Any]) -> Tuple[str, float]:
         elif user == "new":
             conf = 0.82
         else:
-            # suspicious + safe image: slight concern, allow with low conf
             if hist_factor > 1.3:
-                return "flag", 0.58
+                return "flag", 0.58, {"user_signal": "Suspicious user with high flag history."}
             conf = 0.70
-        # boost for clearly positive content
         if safe_s > 0.4 or community_pos:
             conf = min(conf + 0.05, 0.97)
-        return "allow", round(conf, 3)
+        return "allow", round(conf, 3), {"final_logic": "Standard safe content with no flags."}
 
-    # Default
-    return "allow", 0.62
+    return "allow", 0.62, {"final_logic": "Default allow (no clear violations detected)."}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -357,20 +370,12 @@ def run_inference(
 ) -> Dict[str, Any]:
     """
     Run full evaluation and return grading reports for all agents.
-
-    Args:
-        force_rule_based: Skip LLM, run only rule-based.
-        dataset_path:     JSON dataset path.
-        seed:             RNG seed.
-        task_filter:      Grade only this task ('easy'/'medium'/'hard').
-        verbose:          Step-by-step breakdown.
-        extra_agents:     Optional dict {name: agent_fn} for comparison.
     """
     agents: Dict[str, Any] = {}
 
     if not force_rule_based and LLM_AVAILABLE:
-        agents[f"LLM ({MODEL_NAME})"] = llm_agent
-    agents["Rule-Based"] = rule_based_agent
+        agents[f"LLM ({MODEL_NAME})"] = lambda obs: llm_agent(obs)[:2]
+    agents["Rule-Based"] = lambda obs: rule_based_agent(obs)[:2]
 
     if extra_agents:
         agents.update(extra_agents)

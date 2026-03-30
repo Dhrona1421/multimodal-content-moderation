@@ -25,7 +25,7 @@ models:
   info: schemas.StepInfoModel
 
 entry_points:
-  environment: env.py
+  environment: env:ContentModerationEnv
   inference: inference.py
   demo: app.py
   validation: validate_submission.py
