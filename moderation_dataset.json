@@ -1,0 +1,371 @@
+[
+  {
+    "id": 1,
+    "difficulty": "easy",
+    "text": "Just landed in Santorini 🌅 The views here are absolutely breathtaking. Can't believe this is real life! #travel #greece #wanderlust",
+    "image_tag": "safe",
+    "user_type": "trusted",
+    "correct_action": "allow",
+    "reason": "Typical travel post with positive sentiment and no harmful content from a trusted user."
+  },
+  {
+    "id": 2,
+    "difficulty": "easy",
+    "text": "🎉 CONGRATULATIONS! You've been selected to WIN a $1,000 Amazon Gift Card! Click the link in our bio NOW! Limited time offer! DM us your personal details to claim!! 🎉🎉",
+    "image_tag": "misleading",
+    "user_type": "new",
+    "correct_action": "remove",
+    "reason": "Classic scam/spam pattern with urgency, fake prize, and request for personal information."
+  },
+  {
+    "id": 3,
+    "difficulty": "easy",
+    "text": "Hot singles in your area 🔥 Full uncensored content in bio link 😈 No limits tonight 👅 DM for access",
+    "image_tag": "nudity",
+    "user_type": "suspicious",
+    "correct_action": "remove",
+    "reason": "Explicit sexual solicitation with nudity content from a suspicious account — clear platform violation."
+  },
+  {
+    "id": 4,
+    "difficulty": "easy",
+    "text": "DM me for the best prices 💊 Oxy, Xanax, Adderall — no script needed 🔥 Fast discreet shipping guaranteed worldwide",
+    "image_tag": "drugs",
+    "user_type": "suspicious",
+    "correct_action": "remove",
+    "reason": "Explicit illegal sale of controlled substances by name with no-prescription offer from suspicious account."
+  },
+  {
+    "id": 5,
+    "difficulty": "easy",
+    "text": "Everyone at Jefferson High better watch out tomorrow. I have something planned and none of you will forget it. This is your only warning.",
+    "image_tag": "violence",
+    "user_type": "suspicious",
+    "correct_action": "remove",
+    "reason": "Explicit credible threat of violence targeting a specific school — immediate safety risk requiring removal."
+  },
+  {
+    "id": 6,
+    "difficulty": "easy",
+    "text": "Made my grandma's lasagna recipe tonight and I think I finally nailed it 😭❤️ The secret is always extra cheese and love. Full recipe in the comments!",
+    "image_tag": "safe",
+    "user_type": "trusted",
+    "correct_action": "allow",
+    "reason": "Wholesome food post with family sentiment and no harmful content."
+  },
+  {
+    "id": 7,
+    "difficulty": "easy",
+    "text": "URGENT: Your account has been compromised! Click here immediately to verify your identity and avoid suspension: [bit.ly/secure-login-verify] Act NOW before it's too late!",
+    "image_tag": "misleading",
+    "user_type": "new",
+    "correct_action": "remove",
+    "reason": "Phishing attack using fake urgency and security alert framing to steal credentials."
+  },
+  {
+    "id": 8,
+    "difficulty": "easy",
+    "text": "Happy birthday to my absolute best friend in the world 🎂🎉 10 years of memories and I wouldn't trade a single one. Love you to the moon and back!! @bestie",
+    "image_tag": "safe",
+    "user_type": "new",
+    "correct_action": "allow",
+    "reason": "Positive birthday celebration post with no harmful content whatsoever."
+  },
+  {
+    "id": 9,
+    "difficulty": "easy",
+    "text": "These [slur]s don't belong in this country and never did. Go back to where you came from. We don't want your kind anywhere near here.",
+    "image_tag": "safe",
+    "user_type": "suspicious",
+    "correct_action": "remove",
+    "reason": "Explicit hate speech with racial slurs and xenophobic language directly targeting an ethnic group."
+  },
+  {
+    "id": 10,
+    "difficulty": "easy",
+    "text": "Day 30 of my fitness journey 💪 Down 12lbs and feeling stronger than ever. Consistency really is everything. Drop a 🔥 if you're on your own journey!",
+    "image_tag": "safe",
+    "user_type": "trusted",
+    "correct_action": "allow",
+    "reason": "Motivational fitness progress post with positive community engagement and no harmful content."
+  },
+  {
+    "id": 11,
+    "difficulty": "easy",
+    "text": "Selling pharmaceutical grade meds 💊 Valium, Tramadol, OxyContin available. Prices in DM. No questions asked. Worldwide shipping 🌍",
+    "image_tag": "drugs",
+    "user_type": "suspicious",
+    "correct_action": "remove",
+    "reason": "Blatant illegal trafficking of named controlled substances with explicit no-accountability offer."
+  },
+  {
+    "id": 12,
+    "difficulty": "easy",
+    "text": "Meet Biscuit 🐾 Just adopted this little guy from the shelter and I am OBSESSED. He already owns the couch and my entire heart 🐶❤️",
+    "image_tag": "safe",
+    "user_type": "new",
+    "correct_action": "allow",
+    "reason": "Heartwarming pet adoption post with no harmful signals."
+  },
+  {
+    "id": 13,
+    "difficulty": "easy",
+    "text": "Big pharma doesn't want you knowing this!! This one NATURAL root cures cancer, diabetes AND arthritis. Doctors are HIDING it from you. DM me for the secret! 🌿",
+    "image_tag": "misleading",
+    "user_type": "suspicious",
+    "correct_action": "flag",
+    "reason": "Dangerous health misinformation promoting unproven 'cures' and anti-medicine conspiracy with a sales hook."
+  },
+  {
+    "id": 14,
+    "difficulty": "easy",
+    "text": "Golden hour at the lake never gets old 🌇 Sometimes you just need to unplug and breathe it all in. #nature #peaceful #mindfulness",
+    "image_tag": "safe",
+    "user_type": "trusted",
+    "correct_action": "allow",
+    "reason": "Peaceful nature post with a positive mindfulness message and no harmful content."
+  },
+  {
+    "id": 15,
+    "difficulty": "medium",
+    "text": "Just saying, crime rates went way up after THOSE people moved into the neighborhood. Funny how that works right? Do your own research. 👀",
+    "image_tag": "safe",
+    "user_type": "new",
+    "correct_action": "flag",
+    "reason": "Coded racist dog-whistle language implying a racial group causes crime — no explicit slurs but clear discriminatory intent."
+  },
+  {
+    "id": 16,
+    "difficulty": "medium",
+    "text": "Tried gargling diluted bleach for 3 days and my COVID symptoms completely vanished!! Stop getting vaccinated and try this instead. Natural remedies actually work!!",
+    "image_tag": "misleading",
+    "user_type": "trusted",
+    "correct_action": "flag",
+    "reason": "Dangerous health misinformation promoting a toxic self-harm 'remedy' — trusted status does not exempt public health risk."
+  },
+  {
+    "id": 17,
+    "difficulty": "medium",
+    "text": "What a brutal fight last night 🥊 Ramirez landed that uppercut and blood was flying everywhere. Best professional boxing match I've seen in years!! #boxing #sports",
+    "image_tag": "violence",
+    "user_type": "trusted",
+    "correct_action": "allow",
+    "reason": "Sports commentary on a legal professional boxing event — violence is within sanctioned sporting context."
+  },
+  {
+    "id": 18,
+    "difficulty": "medium",
+    "text": "Rolled a fat one on the balcony tonight 🌿😌 Honestly the best way to decompress after a long week. Legal in my state btw before anyone says anything lol",
+    "image_tag": "drugs",
+    "user_type": "new",
+    "correct_action": "flag",
+    "reason": "Casual marijuana use depicted publicly by new user; platform-wide drug content policies apply regardless of local legality."
+  },
+  {
+    "id": 19,
+    "difficulty": "medium",
+    "text": "I turned $500 into $47,000 in 3 weeks with this one crypto method 📈 DM me 'PROFIT' and I'll show you exactly how. This opportunity closes Friday!!",
+    "image_tag": "misleading",
+    "user_type": "suspicious",
+    "correct_action": "flag",
+    "reason": "Financial fraud using fabricated returns, keyword solicitation, and artificial deadline — likely a pump-and-dump scheme."
+  },
+  {
+    "id": 20,
+    "difficulty": "medium",
+    "text": "Morning flow 🧘‍♀️ Sometimes the best yoga is done in the freedom of your own space ✨ Full uncensored sessions available for subscribers on my page 💕",
+    "image_tag": "nudity",
+    "user_type": "new",
+    "correct_action": "flag",
+    "reason": "Suggestive language implying nude paid content; nudity image tag and subscription solicitation warrant human review."
+  },
+  {
+    "id": 21,
+    "difficulty": "medium",
+    "text": "The earth is 100% flat and NASA has been lying since 1969. Look at the curvature of water — it literally DOESN'T exist. Wake up sheeple 🌍🚫",
+    "image_tag": "misleading",
+    "user_type": "suspicious",
+    "correct_action": "flag",
+    "reason": "Flat earth conspiracy actively undermining scientific consensus and spreading falsifiable misinformation."
+  },
+  {
+    "id": 22,
+    "difficulty": "medium",
+    "text": "Lmao did you see Emma's photo? No wonder nobody likes her. She should just quit social media forever, she's genuinely the ugliest person I've ever seen 😂",
+    "image_tag": "safe",
+    "user_type": "new",
+    "correct_action": "flag",
+    "reason": "Targeted personal harassment and body shaming directed at a named individual."
+  },
+  {
+    "id": 23,
+    "difficulty": "medium",
+    "text": "Witnessed the most horrific car accident on Route 9 today. The driver was ejected from the vehicle. Blood everywhere. I took photos. Can't unsee this 😔",
+    "image_tag": "violence",
+    "user_type": "trusted",
+    "correct_action": "flag",
+    "reason": "Graphic real-world accident description with potentially disturbing imagery — warrants review regardless of user trust level."
+  },
+  {
+    "id": 24,
+    "difficulty": "medium",
+    "text": "BREAKING: Leaked documents confirm 3 million votes were switched in the 2024 election using Dominion machines. The mainstream media is completely silent. SHARE BEFORE THIS GETS DELETED",
+    "image_tag": "misleading",
+    "user_type": "trusted",
+    "correct_action": "flag",
+    "reason": "Election integrity misinformation using fabricated 'leaked documents' — dangerous even from a trusted user."
+  },
+  {
+    "id": 25,
+    "difficulty": "medium",
+    "text": "Honestly feeling like such a burden to everyone around me lately. Like what's even the point anymore. Sorry for being so negative, just ignore this lol",
+    "image_tag": "safe",
+    "user_type": "new",
+    "correct_action": "flag",
+    "reason": "Subtle suicidal ideation signals masked as casual venting — requires welfare flag and mental health resource routing."
+  },
+  {
+    "id": 26,
+    "difficulty": "medium",
+    "text": "My cousin said something 'woke' at dinner and my uncle completely destroyed him lmao. That's so gay honestly. These kids are so r*tarded sometimes 😂",
+    "image_tag": "safe",
+    "user_type": "suspicious",
+    "correct_action": "flag",
+    "reason": "Casual use of homophobic and ableist slurs that violate hate speech policies even when not directly targeted at someone."
+  },
+  {
+    "id": 27,
+    "difficulty": "medium",
+    "text": "🚨 Elon Musk is GIVING AWAY $5,000,000 in Bitcoin to his followers! Send 0.1 BTC to the wallet address below and receive DOUBLE back instantly! This is REAL!! 🚨",
+    "image_tag": "misleading",
+    "user_type": "new",
+    "correct_action": "remove",
+    "reason": "Cryptocurrency doubling scam impersonating a celebrity — classic fraud targeting financially vulnerable users, requires immediate removal."
+  },
+  {
+    "id": 28,
+    "difficulty": "hard",
+    "text": "Life is a canvas and every day is a new brushstroke 🎨 Paint yours with intention, love, and courage. Never stop creating your masterpiece ✨",
+    "image_tag": "nudity",
+    "user_type": "trusted",
+    "correct_action": "remove",
+    "reason": "Inspiring, benign text from a trusted user — but paired with a nudity image tag. Image content requires removal regardless of text or user status."
+  },
+  {
+    "id": 29,
+    "difficulty": "hard",
+    "text": "The tree of liberty must be refreshed from time to time with the blood of patriots and tyrants. Remember that the next time they try to take your rights away. 🇺🇸",
+    "image_tag": "violence",
+    "user_type": "trusted",
+    "correct_action": "flag",
+    "reason": "Historical Jefferson quote repurposed as a political threat; violent rhetoric combined with rights grievance warrants review even from a trusted user."
+  },
+  {
+    "id": 30,
+    "difficulty": "hard",
+    "text": "First steps!! 👶🏽 Cannot believe my baby is already walking. Time seriously flies so fast. The most beautiful thing I've ever seen in my life 😭❤️",
+    "image_tag": "safe",
+    "user_type": "suspicious",
+    "correct_action": "allow",
+    "reason": "Completely safe content celebrating a baby's milestone — suspicious user status alone cannot justify actioning innocent family content."
+  },
+  {
+    "id": 31,
+    "difficulty": "hard",
+    "text": "As an ICU nurse, knowing your medication thresholds can genuinely save lives. Acetaminophen toxicity begins around 150mg/kg — many patients accidentally overdose by stacking cold medicines. Always check your labels 🏥",
+    "image_tag": "drugs",
+    "user_type": "trusted",
+    "correct_action": "allow",
+    "reason": "Legitimate harm-reduction medical information from a trusted healthcare worker — educational context, not instructional for misuse."
+  },
+  {
+    "id": 32,
+    "difficulty": "hard",
+    "text": "After deep research into my own health journey, I firmly believe vaccines altered my daughter's gut microbiome and triggered her autism. We are a walking experiment. Trust your instincts, mamas 💉❌",
+    "image_tag": "misleading",
+    "user_type": "trusted",
+    "correct_action": "flag",
+    "reason": "Anti-vaccine misinformation spreading the debunked vaccine-autism link — dangerous regardless of sincere belief or trusted status."
+  },
+  {
+    "id": 33,
+    "difficulty": "hard",
+    "text": "POV: Opening a restaurant in 1955 😂 [Image shows sign: 'Whites Only — No Coloreds Permitted'] Crazy how far we've come... or have we? 🤔 #history #usa",
+    "image_tag": "safe",
+    "user_type": "trusted",
+    "correct_action": "flag",
+    "reason": "Historical segregation imagery framed ambiguously as satire; can spread virally without context and normalize hateful language."
+  },
+  {
+    "id": 34,
+    "difficulty": "hard",
+    "text": "Road trip day 3 through Eastern Europe! The landscapes here are so raw and absolutely stunning. Loving every second of this adventure 🚗🌿 #travel #roadtrip",
+    "image_tag": "violence",
+    "user_type": "new",
+    "correct_action": "flag",
+    "reason": "Benign travel caption from a new user, but paired with a violence-tagged image — image content overrides safe text."
+  },
+  {
+    "id": 35,
+    "difficulty": "hard",
+    "text": "@DarkLordXx99 I'm going to absolutely destroy you tonight you won't even know what hit you. Get ready to get completely wrecked 💀🎮",
+    "image_tag": "violence",
+    "user_type": "new",
+    "correct_action": "flag",
+    "reason": "Violent language likely constituting gaming trash-talk but lacking clear context — ambiguous intent from new user warrants human review."
+  },
+  {
+    "id": 36,
+    "difficulty": "hard",
+    "text": "Found this little guy hiding under a dumpster behind the grocery store. Took him home, cleaned him up, and he's already purring away on my lap 🐱🥹 Rescue life",
+    "image_tag": "safe",
+    "user_type": "suspicious",
+    "correct_action": "allow",
+    "reason": "Suspicious account but content is entirely safe — cat rescue story with zero harmful signals. User flag alone is insufficient basis for action."
+  },
+  {
+    "id": 37,
+    "difficulty": "hard",
+    "text": "Fresh batch just dropped 🍪🔥 Premium quality, reliable as always, discreet packaging. DM if you know what you're looking for. Regulars get first pick 😉",
+    "image_tag": "drugs",
+    "user_type": "trusted",
+    "correct_action": "flag",
+    "reason": "Coded drug dealing language using food emoji as cover; trusted user status does not override clear trafficking pattern signals."
+  },
+  {
+    "id": 38,
+    "difficulty": "hard",
+    "text": "World Mental Health Day reminder: if someone you love is on psychiatric medication, please stop stigmatizing it. These medications save lives every single day. Check on your people 💙 #MentalHealthAwareness",
+    "image_tag": "drugs",
+    "user_type": "trusted",
+    "correct_action": "allow",
+    "reason": "Legitimate mental health destigmatization post from trusted user — drugs image tag reflects pills in photo but context is advocacy, not promotion or misuse."
+  },
+  {
+    "id": 39,
+    "difficulty": "hard",
+    "text": "Just finished Blood Meridian by Cormac McCarthy. One of the most brutal and philosophically haunting novels ever written. If you can stomach it, it will change how you see violence and humanity. 📖 #bookreview",
+    "image_tag": "safe",
+    "user_type": "new",
+    "correct_action": "allow",
+    "reason": "Literary review of a canonical novel by a new user — dark subject framed as genuine literary criticism with no actionable harmful content."
+  },
+  {
+    "id": 40,
+    "difficulty": "hard",
+    "text": "Thread 🧵: That viral image claiming voting machines were hacked is FALSE. Here's a full breakdown of why with primary sources: [link] Please stop sharing this — it's confirmed Russian disinfo. RT to spread the truth instead. 🔍",
+    "image_tag": "misleading",
+    "user_type": "trusted",
+    "correct_action": "allow",
+    "reason": "Trusted user actively debunking misinformation with cited sources — misleading image tag reflects the screenshot referenced, not content being promoted."
+  },
+  {
+    "id": 41,
+    "difficulty": "hard",
+    "text": "بسم الله الرحمن الرحيم، اللهم بارك في أهلي وأصدقائي وأحفظهم من كل شر. آمين 🤲",
+    "image_tag": "safe",
+    "user_type": "suspicious",
+    "correct_action": "allow",
+    "reason": "Arabic prayer translating to 'In the name of God, bless my family and protect them from evil' — suspicious account flag cannot override genuinely safe religious content."
+  }
+]
