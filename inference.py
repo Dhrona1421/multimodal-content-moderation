@@ -15,7 +15,7 @@ Rule-based agent features:
   • Repeat-offender escalation via session history
   • Confidence calibrated to signal strength
 
-Both agents support the (action, confidence) → Tuple return signature
+Both agents support the (action, confidence, reasoning) -> Tuple return signature
 required by the grader for ECE scoring.
 """
 
@@ -183,7 +183,7 @@ def _clean_json(text: str) -> str:
 def llm_agent(
     obs: Dict[str, Any],
     max_retries: int = 3,
-) -> Tuple[str, float]:
+) -> Tuple[str, float, Dict[str, str]]:
     """
     Chain-of-thought LLM agent. Falls back to rule_based_agent on error.
     """
@@ -204,26 +204,26 @@ def llm_agent(
             raw = resp.choices[0].message.content or ""
             clean = _clean_json(raw)
             parsed = json.loads(clean)
-action = str(parsed.get("action", "flag")).lower().strip()
-confidence = float(parsed.get("confidence", 0.75))
-reasoning = parsed.get("reasoning", {})
 
-if action not in ACTIONS:
-    action = "flag"
-confidence = float(max(0.0, min(1.0, confidence)))
-return action, confidence, reasoning
+            action = str(parsed.get("action", "flag")).lower().strip()
+            confidence = float(parsed.get("confidence", 0.75))
+            reasoning = parsed.get("reasoning", {})
 
-except Exception as exc:
-wait = 1 + (attempt * 2)
-print(f"  [LLM] Attempt {attempt+1} failed: {exc}. Retrying in {wait}s...",
-      file=sys.stderr)
-time.sleep(wait)
+            if action not in ACTIONS:
+                action = "flag"
+            confidence = float(max(0.0, min(1.0, confidence)))
+            return action, confidence, reasoning
 
-a, c = rule_based_agent(obs)
-return a, c, {"final_logic": "Fallback to deterministic rules"}
+        except Exception as exc:
+            wait = 1 + (attempt * 2)
+            print(f"  [LLM] Attempt {attempt+1} failed: {exc}. Retrying in {wait}s...",
+                  file=sys.stderr)
+            time.sleep(wait)
+
+    a, c, r = rule_based_agent(obs)
+    return a, c, r
 
 
-def rule_based_agent(obs: Dict[str, Any]) -> Tuple[str, float]:
 # ─────────────────────────────────────────────────────────────────────────────
 # Rule-based agent  (deterministic, no API)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -370,11 +370,22 @@ def run_inference(
 ) -> Dict[str, Any]:
     """
     Run full evaluation and return grading reports for all agents.
+
+    Args:
+        force_rule_based: Skip LLM, run only rule-based.
+        dataset_path:     JSON dataset path.
+        seed:             RNG seed.
+        task_filter:      Grade only this task ('easy'/'medium'/'hard').
+        verbose:          Step-by-step breakdown.
+        extra_agents:     Optional dict {name: agent_fn} for comparison.
     """
     agents: Dict[str, Any] = {}
 
     if not force_rule_based and LLM_AVAILABLE:
+        # Wrap llm_agent to only return (action, confidence) for the grader
         agents[f"LLM ({MODEL_NAME})"] = lambda obs: llm_agent(obs)[:2]
+    
+    # Wrap rule_based_agent to only return (action, confidence) for the grader
     agents["Rule-Based"] = lambda obs: rule_based_agent(obs)[:2]
 
     if extra_agents:
@@ -391,7 +402,6 @@ def run_inference(
     for agent_name, agent_fn in agents.items():
         print(f"  Running: {agent_name}")
         if task_filter:
-            from tasks import TASKS
             result = grader.grade_single_task(task_filter, agent_fn)
             report = {
                 "aggregate_score": result["score"],

@@ -280,6 +280,14 @@ Beyond accuracy, the grader computes:
 ### 5. Vectorised Environment
 `VecContentModerationEnv` runs N independent environments in lockstep for PPO batch rollout collection — standard in modern RL but unusual in OpenEnv submissions.
 
+### 6. Decision Reasoning (The "Why")
+The environment now captures and displays **Agent Reasoning** for every step. Agents evaluate:
+- **Image Signal:** Direct visual violation check.
+- **User Signal:** Contextual trust-level analysis.
+- **Text Signal:** Semantic intent and keyword analysis.
+- **Cross-Modal Conflict:** Detecting when text masks harmful imagery.
+This reasoning is visible live in the **Auto-Pilot** and **Play** tabs of the Gradio demo, transforming the agent from a "black box" into a transparent moderator.
+
 ---
 
 ## 📊 Dataset (41 Posts)

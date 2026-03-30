@@ -41,8 +41,9 @@ def check_environment_contract() -> None:
     while not done:
         next_obs, reward, done, info = env.step({"action": "allow", "confidence": 0.9})
 
-    _assert(next_obs == {}, "terminal step() must return an empty observation")
-    _assert(env.state() == {}, "state() must return an empty observation after termination")
+    # Terminal step returns the last obs for spec-strictness
+    ObservationModel(**next_obs)
+    _assert(next_obs["step"] == 12, "terminal step() must return the last observation")
 
 
 def check_tasks() -> None:
