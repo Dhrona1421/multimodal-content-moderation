@@ -1,6 +1,6 @@
 ﻿---
 title: Multimodal Content Moderation
-emoji: shield
+emoji: 🛡️
 colorFrom: blue
 colorTo: green
 sdk: docker
