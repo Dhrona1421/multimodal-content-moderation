@@ -1,467 +1,351 @@
 """
-inference.py — Advanced inference with chain-of-thought LLM agent and
-               deterministic rule-based baseline.
+Hackathon submission inference runner.
 
-LLM agent features:
-  • Multi-step chain-of-thought reasoning (image → user → text → decision)
-  • 3-shot examples covering easy/medium/hard cases
-  • Structured JSON output: action + confidence + reasoning chain
-  • Retry with exponential backoff on API errors
-  • Conversation-style context window (last 2 steps retained)
+This file is intentionally strict about stdout formatting:
+  [START] ...
+  [STEP] ...
+  [END] ...
 
-Rule-based agent features:
-  • Weighted keyword scoring with per-group thresholds
-  • Cross-modal conflict detection (safe text + harmful image)
-  • Repeat-offender escalation via session history
-  • Confidence calibrated to signal strength
-
-Both agents support the (action, confidence, reasoning) -> Tuple return signature
-required by the grader for ECE scoring.
+Environment variables:
+  API_BASE_URL
+  MODEL_NAME
+  HF_TOKEN
+  LOCAL_IMAGE_NAME (used only when environments are launched from docker image)
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
 import sys
-import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from features import (
-    FEATURE_DIM, ACTIONS, IMAGE_TAGS, USER_TYPES,
-    KEYWORD_GROUPS, BIGRAM_SIGNALS,
+from openai import OpenAI
+
+from openenv_env import OpenEnvModerationEnv
+
+
+# Required by hackathon prompt (LOCAL_IMAGE_NAME is optional for this local env path).
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME", os.getenv("IMAGE_NAME", ""))
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY")
+
+DEFAULT_TASK = os.getenv("OPENENV_TASK", "hard")
+DEFAULT_BENCHMARK = os.getenv("OPENENV_BENCHMARK", "multimodal-content-moderation")
+DEFAULT_MAX_STEPS = int(os.getenv("MAX_STEPS", "12"))
+DEFAULT_SEED = int(os.getenv("SEED", "42"))
+DEFAULT_TEMPERATURE = float(os.getenv("TEMPERATURE", "0.2"))
+DEFAULT_MAX_TOKENS = int(os.getenv("MAX_TOKENS", "180"))
+DEFAULT_SUCCESS_THRESHOLD = float(os.getenv("SUCCESS_SCORE_THRESHOLD", "0.5"))
+
+ACTION_VALUES = {"allow", "flag", "remove"}
+JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+SYSTEM_PROMPT = (
+    "You are a content moderation agent. "
+    "Given one observation, return exactly one JSON object with keys: "
+    "action, confidence, reasoning. "
+    "action must be one of allow, flag, remove. "
+    "confidence must be a float from 0.0 to 1.0."
 )
-from grader import ModerationGrader
-
-for stream_name in ("stdout", "stderr"):
-    stream = getattr(sys, stream_name, None)
-    if hasattr(stream, "reconfigure"):
-        stream.reconfigure(encoding="utf-8")
-
-# ── Configuration ─────────────────────────────────────────────────────────────
-
-MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o-mini")
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
-HF_TOKEN     = os.environ.get("HF_TOKEN", os.environ.get("OPENAI_API_KEY", ""))
-
-CONFIDENCE_THRESHOLD = 0.45   # below → escalate
-
-# ── LLM client ───────────────────────────────────────────────────────────────
-
-try:
-    from openai import OpenAI  # type: ignore
-    _client = OpenAI(api_key=HF_TOKEN, base_url=API_BASE_URL) if HF_TOKEN else None
-    LLM_AVAILABLE = _client is not None
-except ImportError:
-    _client = None
-    LLM_AVAILABLE = False
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Chain-of-thought system prompt
-# ─────────────────────────────────────────────────────────────────────────────
-
-_FEW_SHOT = """
---- EXAMPLE 1 (EASY — remove) ---
-Post: "DM me for Oxy, Xanax, no script needed 🔥 Discreet shipping worldwide"
-Image: drugs | User: suspicious | History: 0
-Reasoning:
-  1. IMAGE: drugs tag confirms pharmaceutical content
-  2. USER:  suspicious account with no session context
-  3. TEXT:  names controlled substances, explicit "no script" = illegal sale
-  4. CROSS: all signals align — no conflict
-Decision: remove (confidence 0.97)
-
---- EXAMPLE 2 (MEDIUM — flag) ---
-Post: "Just saying, crime rates went way up after THOSE people moved in. Funny how that works 👀"
-Image: safe | User: new
-Reasoning:
-  1. IMAGE: safe — no direct visual harm
-  2. USER:  new account, no history
-  3. TEXT:  "those people" + crime correlation = coded racist dog-whistle, no explicit slur
-  4. CROSS: text harm, image safe — moderate severity
-Decision: flag (confidence 0.78)
-
---- EXAMPLE 3 (HARD — allow) ---
-Post: "As an ICU nurse, knowing acetaminophen toxicity thresholds can save lives. Always check labels 🏥"
-Image: drugs | User: trusted
-Reasoning:
-  1. IMAGE: drugs tag — pills in photo
-  2. USER:  trusted, no session flags
-  3. TEXT:  professional medical harm-reduction context, no instructional misuse
-  4. CROSS: drugs image + trusted + educational context → net safe
-Decision: allow (confidence 0.82)
-""".strip()
-
-SYSTEM_PROMPT = f"""You are a senior content moderator at a major social media platform.
-
-You will receive a social media post with:
-  text          — caption or body text
-  image_tag     — safe | nudity | violence | drugs | misleading
-  user_type     — new | trusted | suspicious
-  user_history  — weighted recency-decayed session flag count (0–5)
-  step          — current position in the moderation queue
-
-YOUR TASK: decide one action and rate your confidence.
-
-ACTIONS:
-  allow  — safe content, publish immediately
-  flag   — borderline, route to human review queue
-  remove — clear violation, immediate takedown
-
-CHAIN-OF-THOUGHT PROTOCOL — you must evaluate ALL four signals:
-  1. IMAGE:  Does the image tag alone warrant action?
-  2. USER:   Does user trust level shift the decision?
-  3. TEXT:   What does the text signal (keywords, tone, intent)?
-  4. CROSS:  Do signals conflict? (safe text + harmful image → image wins)
-
-CONFIDENCE CALIBRATION:
-  ≥ 0.85  = very certain (clear violation or clear safe)
-  0.60–0.84 = confident with minor ambiguity
-  0.45–0.59 = uncertain, leaning one way
-  < 0.45  = genuinely unsure → triggers human escalation (partial credit)
-
-MODERATION RULES:
-  • Harmful image overrides safe-looking text
-  • Trusted users get moderate benefit of the doubt — NOT for serious violations
-  • Suspicious user with history ≥ 2 warrants extra scrutiny
-  • Medical/educational context with drugs/violence can be allow
-  • Satire/sports framing does NOT automatically justify graphic content
-  • When torn between flag and remove → choose flag
-
-EXAMPLES:
-{_FEW_SHOT}
-
-Respond ONLY with valid JSON (no markdown fences):
-{{
-  "reasoning": {{
-    "image_signal":  "one sentence",
-    "user_signal":   "one sentence",
-    "text_signal":   "one sentence",
-    "cross_modal":   "one sentence",
-    "final_logic":   "one sentence"
-  }},
-  "action":     "allow|flag|remove",
-  "confidence": 0.0-1.0
-}}"""
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Observation formatter
-# ─────────────────────────────────────────────────────────────────────────────
+def _build_client() -> Optional[OpenAI]:
+    if not HF_TOKEN:
+        return None
+    return OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
-def format_observation(obs: Dict[str, Any]) -> str:
+
+DEFAULT_CLIENT = _build_client()
+
+
+def _to_bool_str(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def _sanitize_text(value: Any) -> str:
+    return str(value).replace("\r", " ").replace("\n", " ").strip()
+
+
+def _extract_json_block(text: str) -> Optional[Dict[str, Any]]:
+    match = JSON_BLOCK_RE.search(text)
+    if not match:
+        return None
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+
+
+def _coerce_action(action: Any) -> str:
+    candidate = str(action).strip().lower()
+    if candidate in ACTION_VALUES:
+        return candidate
+    return "flag"
+
+
+def _coerce_confidence(confidence: Any, default: float = 0.7) -> float:
+    try:
+        value = float(confidence)
+    except (TypeError, ValueError):
+        value = default
+    if value < 0.0:
+        return 0.0
+    if value > 1.0:
+        return 1.0
+    return value
+
+
+def _extract_error(info: Dict[str, Any]) -> str:
+    raw = info.get("last_action_error")
+    if raw is None or raw == "":
+        return "null"
+    return _sanitize_text(raw)
+
+
+def _build_user_prompt(obs: Dict[str, Any], history: List[str]) -> str:
+    history_tail = " | ".join(history[-3:]) if history else "none"
+    text = obs.get("text", "")
+    image_tag = obs.get("image_tag", "safe")
+    user_type = obs.get("user_type", "new")
+    difficulty = obs.get("difficulty", "medium")
+    user_history = obs.get("user_history", 0.0)
+    step = obs.get("step", 1)
+    max_steps = obs.get("max_steps", 12)
     return (
-        f"[Post #{obs.get('post_id','?')} | "
-        f"Step {obs.get('step','?')}/{obs.get('max_steps','?')} | "
-        f"Difficulty: {obs.get('difficulty','?').upper()}]\n\n"
-        f"text         : {obs.get('text','')}\n"
-        f"image_tag    : {obs.get('image_tag','safe')}\n"
-        f"user_type    : {obs.get('user_type','new')}\n"
-        f"user_history : {obs.get('user_history', 0):.2f}  "
-        f"(weighted recency-decayed session flags)\n"
-        f"step         : {obs.get('step',1)}/{obs.get('max_steps',12)}"
+        f"step={step}/{max_steps}\n"
+        f"difficulty={difficulty}\n"
+        f"image_tag={image_tag}\n"
+        f"user_type={user_type}\n"
+        f"user_history={user_history}\n"
+        f"text={text}\n"
+        f"recent_actions={history_tail}\n"
+        "Return JSON only."
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LLM agent
-# ─────────────────────────────────────────────────────────────────────────────
+def rule_based_agent(obs: Dict[str, Any]) -> Tuple[str, float, Dict[str, str]]:
+    image_tag = str(obs.get("image_tag", "safe"))
+    user_type = str(obs.get("user_type", "new"))
+    user_history = float(obs.get("user_history", 0.0))
 
-def _clean_json(text: str) -> str:
-    """Extract and clean a JSON block from potentially messy LLM output."""
-    # 1. Strip markdown code fences (```json or ```)
-    text = re.sub(r"```(?:json)?", "", text)
-    text = re.sub(r"```", "", text)
-    # 2. Extract anything between the first { and the last }
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    if match:
-        return match.group(0).strip()
-    return text.strip()
+    if image_tag == "nudity":
+        return "remove", 0.95, {"reasoning": "Nudity image tag is a direct violation."}
+    if image_tag in {"violence", "drugs"}:
+        return "flag", 0.80, {"reasoning": "Potentially harmful image content needs review."}
+    if image_tag == "misleading":
+        return "flag", 0.75, {"reasoning": "Possible misinformation requires review."}
+    if user_type == "suspicious" and user_history >= 1.5:
+        return "flag", 0.65, {"reasoning": "Suspicious history raises moderation risk."}
+    return "allow", 0.85, {"reasoning": "No strong violation signals detected."}
 
 
 def llm_agent(
     obs: Dict[str, Any],
-    max_retries: int = 3,
+    client: Optional[OpenAI] = None,
+    model_name: str = MODEL_NAME,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    history: Optional[List[str]] = None,
 ) -> Tuple[str, float, Dict[str, str]]:
-    """
-    Chain-of-thought LLM agent. Falls back to rule_based_agent on error.
-    """
-    if not LLM_AVAILABLE:
+    effective_client = client or DEFAULT_CLIENT
+    if effective_client is None:
         return rule_based_agent(obs)
 
-    for attempt in range(max_retries):
+    user_prompt = _build_user_prompt(obs, history or [])
+    try:
+        completion = effective_client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[DEBUG] model request failed: {exc}", file=sys.stderr, flush=True)
+        return rule_based_agent(obs)
+
+    content = completion.choices[0].message.content
+    if isinstance(content, list):
+        merged_parts: List[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                merged_parts.append(str(part.get("text", "")))
+            else:
+                merged_parts.append(str(part))
+        text = "".join(merged_parts).strip()
+    else:
+        text = str(content or "").strip()
+
+    parsed = _extract_json_block(text)
+    if not parsed:
+        return rule_based_agent(obs)
+
+    action = _coerce_action(parsed.get("action", "flag"))
+    confidence = _coerce_confidence(parsed.get("confidence", 0.7))
+    reasoning_val = parsed.get("reasoning", "model-decision")
+    if isinstance(reasoning_val, dict):
+        reasoning = {str(k): _sanitize_text(v) for k, v in reasoning_val.items()}
+    else:
+        reasoning = {"reasoning": _sanitize_text(reasoning_val)}
+    return action, confidence, reasoning
+
+
+def _compute_success(
+    rewards: List[float],
+    last_info: Dict[str, Any],
+    max_steps: int,
+    success_threshold: float,
+) -> bool:
+    if "episode_score" in last_info:
         try:
-            resp = _client.chat.completions.create(   # type: ignore[union-attr]
-                model=MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user",   "content": format_observation(obs)},
-                ],
-                temperature=0.0,
-                max_tokens=450,
+            score = float(last_info["episode_score"])
+            return score >= success_threshold
+        except (TypeError, ValueError):
+            pass
+
+    if max_steps <= 0:
+        return False
+    total = float(sum(rewards))
+    max_reward = max_steps * 1.1
+    min_reward = max_steps * -1.5
+    if max_reward == min_reward:
+        return False
+    score = (total - min_reward) / (max_reward - min_reward)
+    score = max(0.0, min(1.0, score))
+    return score >= success_threshold
+
+
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
+
+def log_step(step: int, action: str, reward: float, done: bool, error: str) -> None:
+    action_str = _sanitize_text(action)
+    error_str = "null" if error == "null" else _sanitize_text(error)
+    print(
+        f"[STEP] step={step} action={action_str} reward={reward:.2f} "
+        f"done={_to_bool_str(done)} error={error_str}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, rewards: List[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={_to_bool_str(success)} steps={steps} rewards={rewards_str}",
+        flush=True,
+    )
+
+
+def _safe_close(env: Any) -> None:
+    close_fn = getattr(env, "close", None)
+    if callable(close_fn):
+        try:
+            close_fn()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[DEBUG] env.close() failed: {exc}", file=sys.stderr, flush=True)
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Strict OpenEnv inference runner")
+    parser.add_argument("--task", choices=["easy", "medium", "hard"], default=DEFAULT_TASK)
+    parser.add_argument("--benchmark", default=DEFAULT_BENCHMARK)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
+    parser.add_argument("--agent", choices=["llm", "rule-based"], default="llm")
+    parser.add_argument("--rule-based", action="store_true", help="Compatibility alias for --agent rule-based")
+    parser.add_argument("--temperature", type=float, default=DEFAULT_TEMPERATURE)
+    parser.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
+    parser.add_argument("--success-threshold", type=float, default=DEFAULT_SUCCESS_THRESHOLD)
+    parser.add_argument("--verbose", action="store_true", help="Accepted for backward compatibility; ignored")
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = _parse_args()
+    if args.rule_based:
+        args.agent = "rule-based"
+
+    env = OpenEnvModerationEnv(task=args.task, max_steps=args.max_steps, seed=args.seed)
+    rewards: List[float] = []
+    history: List[str] = []
+    last_info: Dict[str, Any] = {}
+    steps_taken = 0
+    success = False
+
+    log_start(task=args.task, env=args.benchmark, model=MODEL_NAME)
+
+    try:
+        observation = env.reset()
+        for step in range(1, args.max_steps + 1):
+            current_state = env.state() or observation
+            if args.agent == "llm":
+                action, confidence, reasoning = llm_agent(
+                    current_state,
+                    client=DEFAULT_CLIENT,
+                    model_name=MODEL_NAME,
+                    temperature=args.temperature,
+                    max_tokens=args.max_tokens,
+                    history=history,
+                )
+            else:
+                action, confidence, reasoning = rule_based_agent(current_state)
+
+            payload = {
+                "action": _coerce_action(action),
+                "confidence": _coerce_confidence(confidence),
+                "agent_reasoning": reasoning,
+            }
+
+            next_obs, reward, done, info = env.step(payload)
+            reward_val = float(reward)
+            error_val = _extract_error(info)
+            log_step(
+                step=step,
+                action=payload["action"],
+                reward=reward_val,
+                done=bool(done),
+                error=error_val,
             )
-            raw = resp.choices[0].message.content or ""
-            clean = _clean_json(raw)
-            parsed = json.loads(clean)
 
-            action = str(parsed.get("action", "flag")).lower().strip()
-            confidence = float(parsed.get("confidence", 0.75))
-            reasoning = parsed.get("reasoning", {})
+            rewards.append(reward_val)
+            steps_taken = step
+            last_info = dict(info)
+            observation = next_obs
+            history.append(payload["action"])
 
-            if action not in ACTIONS:
-                action = "flag"
-            confidence = float(max(0.0, min(1.0, confidence)))
-            return action, confidence, reasoning
+            if done:
+                break
 
-        except Exception as exc:
-            wait = 1 + (attempt * 2)
-            print(f"  [LLM] Attempt {attempt+1} failed: {exc}. Retrying in {wait}s...",
-                  file=sys.stderr)
-            time.sleep(wait)
-
-    a, c, r = rule_based_agent(obs)
-    return a, c, r
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Rule-based agent  (deterministic, no API)
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _keyword_score(text: str, group: str) -> float:
-    """Return fraction of group keywords present in text."""
-    kws  = KEYWORD_GROUPS.get(group, [])
-    hits = sum(1 for kw in kws if kw in text)
-    return min(hits / max(len(kws) * 0.25, 1.0), 1.0)
+        success = _compute_success(
+            rewards=rewards,
+            last_info=last_info,
+            max_steps=args.max_steps,
+            success_threshold=args.success_threshold,
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"[DEBUG] inference loop failed: {exc}", file=sys.stderr, flush=True)
+    finally:
+        _safe_close(env)
+        log_end(success=success, steps=steps_taken, rewards=rewards)
 
 
-def _phrase_hit(text: str, group: str) -> bool:
-    return any(p in text for p in BIGRAM_SIGNALS.get(group, []))
-
-
-def rule_based_agent(obs: Dict[str, Any]) -> Tuple[str, float, Dict[str, str]]:
+def run_inference(*args: Any, **kwargs: Any) -> Dict[str, Any]:
     """
-    Deterministic rule-based agent using weighted keyword scoring
-    and cross-modal conflict resolution.
-
-    Returns (action, confidence, reasoning_dict).
+    Backward-compatible import path for local validation tooling.
+    The full multi-agent evaluation runner now lives in inference_eval.py.
     """
-    image   = obs.get("image_tag",    "safe")
-    user    = obs.get("user_type",    "new")
-    text    = obs.get("text",         "").lower()
-    history = float(obs.get("user_history", 0))
+    from inference_eval import run_inference as _run_inference
 
-    # ── Keyword scores ────────────────────────────────────────────────────────
-    spam_s    = _keyword_score(text, "spam_scam")
-    hate_s    = _keyword_score(text, "hate_speech")
-    viol_s    = _keyword_score(text, "violence")
-    drug_s    = _keyword_score(text, "drugs")
-    misinfo_s = _keyword_score(text, "misleading")
-    harm_s    = _keyword_score(text, "self_harm")
-    fraud_s   = _keyword_score(text, "financial_fraud")
-    safe_s    = _keyword_score(text, "safe_positive")
-    edu_s     = _keyword_score(text, "professional_educational")
+    return _run_inference(*args, **kwargs)
 
-    # ── Phrase signals ────────────────────────────────────────────────────────
-    credible_threat  = _phrase_hit(text, "credible_threat")
-    coded_sales      = _phrase_hit(text, "coded_sales")
-    authoritative    = _phrase_hit(text, "authoritative_deny")
-    community_pos    = _phrase_hit(text, "community_positive")
-
-    # ── Trust modifier ────────────────────────────────────────────────────────
-    trust_factor = {"trusted": 0.7, "new": 1.0, "suspicious": 1.3}.get(user, 1.0)
-    # history amplifier: each unit of decayed history adds 10% weight
-    hist_factor  = 1.0 + min(history * 0.1, 0.5)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Decision tree (ordered by severity)
-    # ─────────────────────────────────────────────────────────────────────────
-
-    # 1. Absolute removes — image-driven, regardless of text/user
-    if image == "nudity":
-        return "remove", 0.97, {"image_signal": "Nudity tag requires immediate takedown."}
-
-    if credible_threat:
-        return "remove", 0.95, {"text_signal": "Credible threat detected in caption."}
-
-    if image == "drugs" and spam_s > 0.4 * trust_factor:
-        conf = round(min(0.85 + spam_s * 0.1, 0.97), 3)
-        return "remove", conf, {"cross_modal": "Drug image combined with pharmaceutical sales text."}
-
-    if spam_s > 0.55 * trust_factor and user != "trusted":
-        conf = round(min(0.82 + spam_s * 0.1, 0.97), 3)
-        return "remove", conf, {"text_signal": "High spam score detected for non-trusted user."}
-
-    if fraud_s > 0.5 and image in ("safe", "misleading"):
-        act = "remove" if user == "suspicious" else "flag"
-        return act, 0.85, {"text_signal": f"Financial fraud indicators ({fraud_s:.2f}) lead to {act}."}
-
-    # 2. Remove on high harm text + suspicious
-    if user == "suspicious" and hist_factor > 1.3:
-        if hate_s > 0.3 or viol_s > 0.3:
-            conf = round(min(0.72 + hist_factor * 0.05, 0.90), 3)
-            return "remove", conf, {"user_signal": "Suspicious user with harmful text history."}
-
-    # 3. Flag — image-driven
-    if image == "misleading":
-        if authoritative and edu_s > 0.2:
-            return "allow", 0.75, {"final_logic": "Agent actively debunking misinformation."}
-        conf = 0.80 if user != "trusted" else 0.72
-        return "flag", round(conf * trust_factor, 3), {"image_signal": "Misleading image tag requires review."}
-
-    if image == "violence":
-        sports = ["boxing", "mma", "ufc", "wrestling", "match", "fight night",
-                  "professional", "tournament"]
-        if any(k in text for k in sports) and edu_s > 0.1:
-            return "allow", 0.76, {"final_logic": "Content recognized as professional sports."}
-        return "flag", round(0.79 * trust_factor, 3), {"image_signal": "Violent image tag requires review."}
-
-    if image == "drugs":
-        if edu_s > 0.3 and user == "trusted":
-            return "allow", 0.80, {"final_logic": "Medical/educational drug content from trusted user."}
-        return "flag", round(0.76 * trust_factor, 3), {"image_signal": "Drug image tag requires review."}
-
-    # 4. Flag — text-driven
-    weighted_hate = hate_s * trust_factor * hist_factor
-    if weighted_hate > 0.25:
-        conf = round(min(0.65 + weighted_hate * 0.2, 0.90), 3)
-        return "flag", conf, {"text_signal": "Hate speech indicators above threshold."}
-
-    if misinfo_s > 0.35:
-        return "flag", round(0.74 * trust_factor, 3), {"text_signal": "Misinformation indicators detected."}
-
-    if harm_s > 0.3:
-        return "flag", 0.78, {"text_signal": "Self-harm indicators detected."}
-
-    if drug_s > 0.4:
-        return "flag", round(0.72 * trust_factor, 3), {"text_signal": "Drug-related keywords detected."}
-
-    if coded_sales and user != "trusted":
-        return "flag", round(0.68 * trust_factor * hist_factor, 3), {"text_signal": "Coded trafficking language detected."}
-
-    # 5. Allow
-    if image == "safe":
-        if user == "trusted":
-            conf = 0.93
-        elif user == "new":
-            conf = 0.82
-        else:
-            if hist_factor > 1.3:
-                return "flag", 0.58, {"user_signal": "Suspicious user with high flag history."}
-            conf = 0.70
-        if safe_s > 0.4 or community_pos:
-            conf = min(conf + 0.05, 0.97)
-        return "allow", round(conf, 3), {"final_logic": "Standard safe content with no flags."}
-
-    return "allow", 0.62, {"final_logic": "Default allow (no clear violations detected)."}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Full evaluation runner
-# ─────────────────────────────────────────────────────────────────────────────
-
-def run_inference(
-    force_rule_based: bool          = False,
-    dataset_path:     str           = "moderation_dataset.json",
-    seed:             int           = 42,
-    task_filter:      Optional[str] = None,
-    verbose:          bool          = False,
-    extra_agents:     Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """
-    Run full evaluation and return grading reports for all agents.
-
-    Args:
-        force_rule_based: Skip LLM, run only rule-based.
-        dataset_path:     JSON dataset path.
-        seed:             RNG seed.
-        task_filter:      Grade only this task ('easy'/'medium'/'hard').
-        verbose:          Step-by-step breakdown.
-        extra_agents:     Optional dict {name: agent_fn} for comparison.
-    """
-    agents: Dict[str, Any] = {}
-
-    if not force_rule_based and LLM_AVAILABLE:
-        # Wrap llm_agent to only return (action, confidence) for the grader
-        agents[f"LLM ({MODEL_NAME})"] = lambda obs: llm_agent(obs)[:2]
-    
-    # Wrap rule_based_agent to only return (action, confidence) for the grader
-    agents["Rule-Based"] = lambda obs: rule_based_agent(obs)[:2]
-
-    if extra_agents:
-        agents.update(extra_agents)
-
-    grader  = ModerationGrader(dataset_path=dataset_path, seed=seed)
-    reports: Dict[str, Any] = {}
-
-    print(f"\n{'═'*78}")
-    print(f"  Content Moderation Environment — Inference & Evaluation")
-    print(f"  Agents: {', '.join(agents.keys())}   Seed: {seed}")
-    print(f"{'═'*78}\n")
-
-    for agent_name, agent_fn in agents.items():
-        print(f"  Running: {agent_name}")
-        if task_filter:
-            result = grader.grade_single_task(task_filter, agent_fn)
-            report = {
-                "aggregate_score": result["score"],
-                "tasks": {task_filter: result},
-                "summary": grader._build_summary({task_filter: result}, result["score"]),
-            }
-        else:
-            report = grader.grade_all_tasks(agent_fn)
-
-        reports[agent_name] = report
-        grader.print_report(report, verbose=verbose)
-
-    # ── Comparison table ──────────────────────────────────────────────────────
-    if len(agents) > 1:
-        print(f"\n{'═'*78}")
-        print(f"  AGENT COMPARISON")
-        print(f"{'─'*78}")
-        tasks_shown = list(reports[list(agents.keys())[0]]["tasks"].keys())
-        header = f"  {'Agent':<25}" + "".join(f" {t.upper():>10}" for t in tasks_shown) + "  AGGREGATE"
-        print(header)
-        print(f"{'─'*78}")
-        for name, rpt in reports.items():
-            row = f"  {name:<25}"
-            for t in tasks_shown:
-                row += f" {rpt['tasks'][t]['score']:>10.4f}"
-            row += f"  {rpt['aggregate_score']:>9.4f}"
-            print(row)
-        print(f"{'═'*78}\n")
-
-    # Save results
-    slim: Dict[str, Any] = {
-        "seed": seed,
-        "agents": {
-            name: {
-                "aggregate_score": rpt["aggregate_score"],
-                "tasks": {
-                    t: {k: v for k, v in d.items() if k not in ("step_results",)}
-                    for t, d in rpt["tasks"].items()
-                },
-            }
-            for name, rpt in reports.items()
-        },
-    }
-    with open("results.json", "w", encoding="utf-8") as fh:
-        json.dump(slim, fh, indent=2)
-    print("  [Results saved → results.json]\n")
-
-    return reports
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CLI
-# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    args = sys.argv[1:]
-    seed = int(args[args.index("--seed") + 1]) if "--seed" in args else 42
-    reports = run_inference(
-        force_rule_based="--rule-based" in args,
-        verbose="--verbose" in args,
-        seed=seed,
-        task_filter=(args[args.index("--task") + 1] if "--task" in args else None),
-    )
+    main()

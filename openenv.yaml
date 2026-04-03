@@ -27,6 +27,7 @@ models:
 entry_points:
   environment: openenv_env:OpenEnvModerationEnv
   inference: inference.py
+  inference_eval: inference_eval.py
   api_inference: api_inference.py
   api: api.py
   demo: app.py
@@ -111,13 +112,14 @@ grader:
 
 baseline:
   script: inference.py
-  command: python inference.py --rule-based --seed 42
+  command: python inference.py --task hard --rule-based --seed 42 --max-steps 12
   reproducible: true
   env_vars:
     - API_BASE_URL
     - MODEL_NAME
     - HF_TOKEN
     - OPENAI_API_KEY
+    - LOCAL_IMAGE_NAME
     - OPENENV_API_ONLY
     - OPENENV_ENABLE_UI
 
