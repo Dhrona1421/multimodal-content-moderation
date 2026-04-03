@@ -186,9 +186,7 @@ class ContentModerationEnv:
         action_model = self._coerce_action(action)
         action = action_model.action
         confidence = action_model.confidence
-        agent_reasoning = getattr(action_model, "agent_reasoning", None)
-        if agent_reasoning is None and isinstance(action, dict):
-            agent_reasoning = action.get("agent_reasoning")
+        agent_reasoning = action_model.agent_reasoning
 
         post       = self.episode_posts[self.current_step]
         correct    = post["correct_action"]

@@ -43,6 +43,7 @@ class ActionModel(BaseModel):
 
     action: ActionLiteral
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    agent_reasoning: Optional[Dict[str, str]] = None
 
 
 class RewardModel(BaseModel):
