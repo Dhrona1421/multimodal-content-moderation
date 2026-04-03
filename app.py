@@ -985,13 +985,12 @@ Arabic-language prayer, nurse harm-reduction content, coding drug sales as food 
 
 def create_app(api_only: Optional[bool] = None) -> FastAPI:
     if api_only is None:
-        # API-first default. UI can be explicitly enabled with OPENENV_ENABLE_UI=1.
-        if _truthy_env("OPENENV_ENABLE_UI"):
-            api_only = False
-        elif os.getenv("OPENENV_API_ONLY", "").strip():
+        # UI-first default for local and HF Space visibility.
+        # Set OPENENV_API_ONLY=1 to run in API-only mode.
+        if os.getenv("OPENENV_API_ONLY", "").strip():
             api_only = _truthy_env("OPENENV_API_ONLY")
         else:
-            api_only = True
+            api_only = False
     ui = None if api_only else build_ui()
     api = FastAPI(title=f"{ENV_TITLE} OpenEnv API", version="3.0.0")
 
