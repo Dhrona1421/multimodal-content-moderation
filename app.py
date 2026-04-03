@@ -96,6 +96,28 @@ def _load_pretrained_ppo_agent():
     raise FileNotFoundError(f"no PPO checkpoint found; expected one of: {expected}")
 
 
+def _grader_agent(agent_fn):
+    """
+    Adapt any agent output to grader-compatible `(action, confidence)`.
+    Accepts:
+      - dict with action/confidence
+      - tuple/list with at least 2 items
+      - raw action string
+    """
+    def _wrapped(obs: Dict[str, Any]):
+        raw = agent_fn(obs)
+        if isinstance(raw, dict):
+            return str(raw.get("action", "flag")), float(raw.get("confidence", 1.0))
+        if isinstance(raw, (list, tuple)):
+            if len(raw) >= 2:
+                return str(raw[0]), float(raw[1])
+            if len(raw) == 1:
+                return str(raw[0]), 1.0
+        return str(raw), 1.0
+
+    return _wrapped
+
+
 class ResetRequest(BaseModel):
     task: str = Field(default="medium", pattern="^(easy|medium|hard)$")
     seed: int = 42
@@ -552,10 +574,10 @@ def run_training(n_updates: int, task: str) -> tuple:
     # Final eval
     grader   = ModerationGrader(seed=42)
     agent_fn = make_ppo_agent(net)
-    report   = grader.grade_all_tasks(agent_fn)
+    report   = grader.grade_all_tasks(_grader_agent(agent_fn))
 
     agg      = report["aggregate_score"]
-    rb_report= grader.grade_all_tasks(rule_based_agent)
+    rb_report= grader.grade_all_tasks(_grader_agent(rule_based_agent))
     rb_agg   = rb_report["aggregate_score"]
     score_cards = []
     for t in ["easy", "medium", "hard"]:
@@ -713,16 +735,16 @@ def dataset_analytics() -> str:
 
 def run_leaderboard() -> tuple:
     grader    = ModerationGrader(seed=42)
-    agents    = {"Rule-Based": rule_based_agent}
+    agents    = {"Rule-Based": _grader_agent(rule_based_agent)}
 
     # Try loading PPO checkpoint
     try:
-        agents["PPO Agent"] = _load_pretrained_ppo_agent()
+        agents["PPO Agent"] = _grader_agent(_load_pretrained_ppo_agent())
     except Exception:
         pass
 
     if LLM_AVAILABLE:
-        agents[f"LLM ({os.environ.get('MODEL_NAME','gpt-4o-mini')})"] = llm_agent
+        agents[f"LLM ({os.environ.get('MODEL_NAME','gpt-4o-mini')})"] = _grader_agent(llm_agent)
 
     import random as _r
     _rng = _r.Random(7)
