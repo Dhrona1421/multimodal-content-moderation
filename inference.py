@@ -60,6 +60,7 @@ def _build_client() -> Optional[OpenAI]:
 
 
 DEFAULT_CLIENT = _build_client()
+LLM_AVAILABLE = DEFAULT_CLIENT is not None
 
 
 def _to_bool_str(value: bool) -> str:
