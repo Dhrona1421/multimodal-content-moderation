@@ -83,6 +83,7 @@ COPY ppo_checkpoint_final.npz ./ppo_checkpoint_final.npz
 # If HF_TOKEN is unset, the rule-based agent runs automatically.
 ENV MODEL_NAME=""
 ENV API_BASE_URL="https://api.openai.com/v1"
+ENV OPENENV_ENABLE_UI="1"
 
 # ── Gradio port ───────────────────────────────────────────────────────────────
 EXPOSE 7860
@@ -102,7 +103,7 @@ print('HEALTH OK') \
 "
 
 # ── Default: launch Gradio demo ───────────────────────────────────────────────
-CMD ["python", "api.py"]
+CMD ["python", "app.py"]
 
 # ── Override examples ─────────────────────────────────────────────────────────
 # docker run -e HF_TOKEN=sk-... -p 7860:7860 <image>           # LLM agent
