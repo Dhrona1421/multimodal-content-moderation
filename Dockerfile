@@ -55,6 +55,7 @@ COPY schemas.py              .
 COPY tasks.py                .
 COPY grader.py               .
 COPY inference.py            .
+COPY inference_eval.py       .
 COPY api_inference.py        .
 COPY train.py                .
 COPY app.py                  .
@@ -81,9 +82,9 @@ COPY ppo_checkpoint_final.npz ./ppo_checkpoint_final.npz
 # ── Runtime secrets (override at launch; no defaults baked in) ───────────────
 # Gradio demo auto-detects LLM availability from HF_TOKEN.
 # If HF_TOKEN is unset, the rule-based agent runs automatically.
-ENV MODEL_NAME=""
-ENV API_BASE_URL="https://api.openai.com/v1"
-ENV OPENENV_ENABLE_UI="1"
+ENV MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"
+ENV API_BASE_URL="https://router.huggingface.co/v1"
+ENV OPENENV_API_ONLY="0"
 
 # ── Gradio port ───────────────────────────────────────────────────────────────
 EXPOSE 7860

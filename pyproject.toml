@@ -47,6 +47,7 @@ py-modules = [
   "features",
   "grader",
   "inference",
+  "inference_eval",
   "network",
   "openenv_env",
   "schemas",

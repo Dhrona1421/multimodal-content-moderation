@@ -121,7 +121,6 @@ baseline:
     - OPENAI_API_KEY
     - LOCAL_IMAGE_NAME
     - OPENENV_API_ONLY
-    - OPENENV_ENABLE_UI
 
 dependencies:
   required:

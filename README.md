@@ -425,7 +425,7 @@ openenv validate --verbose
 # Run the OpenEnv server entrypoint directly
 uv run server
 
-# Launch API server directly (API-first default)
+# Launch API-only server entrypoint
 python api.py
 
 # Train PPO from scratch (full curriculum)
@@ -434,8 +434,11 @@ python train.py --updates 200
 # Evaluate saved checkpoint
 python train.py --eval-only --checkpoint ppo_checkpoint
 
-# Launch Gradio UI explicitly (optional)
-OPENENV_ENABLE_UI=1 \
+# Launch Gradio UI + API (default mode)
+python app.py
+
+# Force API-only mode from app.py if needed
+OPENENV_API_ONLY=1 \
 python app.py
 ```
 
@@ -672,8 +675,7 @@ The `Dockerfile` is configured for HF Spaces:
 | `MODEL_NAME`  | `Qwen/Qwen2.5-72B-Instruct`    | Model identifier for OpenAI-compat API |
 | `API_BASE_URL`| `https://router.huggingface.co/v1` | API base URL (supports any OpenAI-compat endpoint) |
 | `LOCAL_IMAGE_NAME` | *(unset)*                 | Docker image name when using from_docker_image() style env launch |
-| `OPENENV_ENABLE_UI` | `0`                       | If `1`, mounts Gradio UI; default is API-only |
-| `OPENENV_API_ONLY` | *(optional override)*      | Legacy compatibility flag for create_app() |
+| `OPENENV_API_ONLY` | `0`                        | If `1`, runs API-only mode (no Gradio UI) |
 
 ### Submission Validator
 
