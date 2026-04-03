@@ -15,13 +15,14 @@ import json
 import os
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import gradio as gr
 import numpy as np
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 
 from env      import ContentModerationEnv
@@ -70,6 +71,10 @@ UI_CSS = """
 """
 
 
+def _truthy_env(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _load_pretrained_ppo_agent():
     from network import ActorCriticNetwork
     from train import make_ppo_agent
@@ -95,36 +100,61 @@ class ResetRequest(BaseModel):
     task: str = Field(default="medium", pattern="^(easy|medium|hard)$")
     seed: int = 42
     max_steps: int = Field(default=12, ge=1, le=64)
+    env_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
 
 
 class EnvService:
+    DEFAULT_ENV_ID = "default"
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._env: Optional[ContentModerationEnv] = None
+        self._envs: Dict[str, ContentModerationEnv] = {}
 
-    def reset(self, task: str = "medium", seed: int = 42, max_steps: int = 12) -> Dict[str, Any]:
-        with self._lock:
-            self._env = ContentModerationEnv(task=task, seed=seed, max_steps=max_steps)
-            return self._env.reset()
+    def _resolve_env_id(self, env_id: Optional[str]) -> str:
+        if env_id is None:
+            return self.DEFAULT_ENV_ID
+        env_id = str(env_id).strip()
+        return env_id or self.DEFAULT_ENV_ID
 
-    def state(self) -> Dict[str, Any]:
+    def reset(
+        self,
+        task: str = "medium",
+        seed: int = 42,
+        max_steps: int = 12,
+        env_id: Optional[str] = None,
+    ) -> tuple[str, Dict[str, Any]]:
         with self._lock:
-            if self._env is None:
+            session_id = self._resolve_env_id(env_id)
+            self._envs[session_id] = ContentModerationEnv(task=task, seed=seed, max_steps=max_steps)
+            return session_id, self._envs[session_id].reset()
+
+    def state(self, env_id: Optional[str] = None) -> Dict[str, Any]:
+        with self._lock:
+            env = self._envs.get(self._resolve_env_id(env_id))
+            if env is None:
                 return {}
-            return self._env.state()
+            return env.state()
 
-    def step(self, action_payload: Dict[str, Any]) -> Dict[str, Any]:
+    def step(self, action_payload: Dict[str, Any], env_id: Optional[str] = None) -> Dict[str, Any]:
         with self._lock:
-            if self._env is None:
-                raise RuntimeError("Environment not initialized. Call /reset first.")
+            session_id = self._resolve_env_id(env_id)
+            env = self._envs.get(session_id)
+            if env is None:
+                raise RuntimeError(
+                    f"Environment session '{session_id}' not initialized. Call /reset first."
+                )
 
-            observation, reward, done, info = self._env.step(action_payload)
+            observation, reward, done, info = env.step(action_payload)
             return {
                 "observation": observation,
                 "reward": reward,
                 "done": done,
                 "info": info,
             }
+
+    def active_sessions(self) -> int:
+        with self._lock:
+            return len(self._envs)
 
 
 ENV_SERVICE = EnvService()
@@ -811,6 +841,9 @@ def build_ui() -> gr.Blocks:
     OpenEnv RL Environment v2 &nbsp;·&nbsp;
     Meta × Hugging Face × PyTorch Hackathon
   </p>
+  <p style="color:#9ca3af;margin:6px 0 0;font-size:0.72em">
+    created by Dhrona
+  </p>
 </div>""")
 
         with gr.Tabs():
@@ -950,9 +983,28 @@ Arabic-language prayer, nurse harm-reduction content, coding drug sales as food 
     return demo
 
 
-def create_app() -> FastAPI:
-    ui = build_ui()
+def create_app(api_only: Optional[bool] = None) -> FastAPI:
+    if api_only is None:
+        # API-first default. UI can be explicitly enabled with OPENENV_ENABLE_UI=1.
+        if _truthy_env("OPENENV_ENABLE_UI"):
+            api_only = False
+        elif os.getenv("OPENENV_API_ONLY", "").strip():
+            api_only = _truthy_env("OPENENV_API_ONLY")
+        else:
+            api_only = True
+    ui = None if api_only else build_ui()
     api = FastAPI(title=f"{ENV_TITLE} OpenEnv API", version="3.0.0")
+
+    if api_only:
+        @api.get("/")
+        def root() -> Dict[str, Any]:
+            return {
+                "name": ENV_NAME,
+                "status": "ready",
+                "docs": "/docs",
+                "health": "/health",
+                "api_mode": "only",
+            }
 
     @api.get("/health")
     @api.get("/healthz")
@@ -963,6 +1015,7 @@ def create_app() -> FastAPI:
             "version": api.version,
             "tasks": list(TASKS.keys()),
             "llm_available": LLM_AVAILABLE,
+            "active_sessions": ENV_SERVICE.active_sessions(),
         }
 
     @api.get("/metadata")
@@ -976,12 +1029,33 @@ def create_app() -> FastAPI:
             "mode": "simulation",
             "tags": ["openenv", "content-moderation", "multimodal", "safety"],
             "tasks": list(TASKS.keys()),
+            "ui_enabled": not api_only,
+            "session_transport": {
+                "header": "X-Env-Id",
+                "body_field": "env_id",
+                "default": EnvService.DEFAULT_ENV_ID,
+            },
         }
 
     @api.get("/schema")
     def schema() -> Dict[str, Any]:
         return {
             "action": ActionModel.model_json_schema(),
+            "step_request": {
+                "type": "object",
+                "description": (
+                    "Canonical action payload. Optional env_id may be supplied here, "
+                    "or through the X-Env-Id header."
+                ),
+                "properties": {
+                    **ActionModel.model_json_schema().get("properties", {}),
+                    "env_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                    },
+                },
+            },
             "observation": ObservationModel.model_json_schema(),
             "state": {
                 "type": "object",
@@ -1013,27 +1087,49 @@ def create_app() -> FastAPI:
         }
 
     @api.post("/reset")
-    def reset_environment(request: ResetRequest = ResetRequest()) -> Dict[str, Any]:
-        return ENV_SERVICE.reset(
+    def reset_environment(
+        response: Response,
+        request: ResetRequest = ResetRequest(),
+        x_env_id: Optional[str] = Header(default=None, alias="X-Env-Id"),
+    ) -> Dict[str, Any]:
+        session_id = request.env_id or x_env_id
+        if session_id and session_id.strip().lower() in {"new", "auto"}:
+            session_id = f"session-{uuid.uuid4().hex[:12]}"
+        env_id, observation = ENV_SERVICE.reset(
             task=request.task,
             seed=request.seed,
             max_steps=request.max_steps,
+            env_id=session_id,
         )
+        response.headers["X-Env-Id"] = env_id
+        return observation
 
     @api.get("/state")
     @api.post("/state")
-    def current_state() -> Dict[str, Any]:
-        return ENV_SERVICE.state()
+    def current_state(
+        env_id: Optional[str] = Query(default=None),
+        x_env_id: Optional[str] = Header(default=None, alias="X-Env-Id"),
+    ) -> Dict[str, Any]:
+        return ENV_SERVICE.state(env_id=env_id or x_env_id)
 
     @api.post("/step")
-    def step_environment(action: Dict[str, Any]) -> Dict[str, Any]:
+    def step_environment(
+        action: Dict[str, Any],
+        env_id: Optional[str] = Query(default=None),
+        x_env_id: Optional[str] = Header(default=None, alias="X-Env-Id"),
+    ) -> Dict[str, Any]:
         try:
-            return ENV_SERVICE.step(action)
+            payload = dict(action)
+            body_env_id = payload.pop("env_id", None)
+            resolved_env_id = body_env_id or env_id or x_env_id
+            return ENV_SERVICE.step(payload, env_id=resolved_env_id)
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    if api_only:
+        return api
     return gr.mount_gradio_app(api, ui, path="/", theme=UI_THEME, css=UI_CSS)
 
 
@@ -1041,4 +1137,4 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "7860")))

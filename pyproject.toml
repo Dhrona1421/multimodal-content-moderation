@@ -32,6 +32,7 @@ dev = [
 
 [project.scripts]
 server = "server.app:main"
+api-server = "api:main"
 
 [project.urls]
 Homepage = "https://huggingface.co"
@@ -39,12 +40,15 @@ Repository = "https://huggingface.co"
 
 [tool.setuptools]
 py-modules = [
+  "api",
+  "api_inference",
   "app",
   "env",
   "features",
   "grader",
   "inference",
   "network",
+  "openenv_env",
   "schemas",
   "tasks",
   "train",

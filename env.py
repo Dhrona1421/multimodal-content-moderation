@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -79,7 +80,7 @@ class ContentModerationEnv:
     user_type     str    — new | trusted | suspicious
     difficulty    str    — easy | medium | hard
     step          int    — 1-indexed current step
-    max_steps     int    — fixed at 8
+    max_steps     int    — configurable per episode (default 12)
     user_history  int    — rolling weighted flags on this user_type
     session_stats dict   — {correct, wrong, flagged, removed} so far
     features      ndarray— pre-computed 64-dim feature vector
@@ -157,11 +158,18 @@ class ContentModerationEnv:
 
         pool = list(self.task_pool)
         if len(pool) >= self.max_steps:
-            self.episode_posts = self._rng.sample(pool, self.max_steps)
+            selected_posts = self._rng.sample(pool, self.max_steps)
         else:
             mult = (self.max_steps // len(pool)) + 1
-            self.episode_posts = (pool * mult)[:self.max_steps]
-            self._rng.shuffle(self.episode_posts)
+            selected_posts = (pool * mult)[:self.max_steps]
+            self._rng.shuffle(selected_posts)
+
+        # Build deterministic per-episode text variants so the environment is
+        # not a pure static replay while remaining reproducible by seed.
+        self.episode_posts = [
+            self._materialize_post_variant(post, slot_idx)
+            for slot_idx, post in enumerate(selected_posts)
+        ]
 
         return self._build_obs(self.current_step)
 
@@ -230,6 +238,7 @@ class ContentModerationEnv:
             "reward":         reward,
             "is_correct":     is_correct,
             "reason":         post["reason"],
+            "variant_applied": bool(post.get("variant_applied", False)),
             "image_tag":      image_tag,
             "user_type":      user_type,
             "difficulty":     difficulty,
@@ -335,6 +344,83 @@ class ContentModerationEnv:
         obs["features"] = extract_features(obs).astype(np.float32).tolist()
         obs["session_stats"] = SessionStatsModel(**obs["session_stats"])
         return ObservationModel(**obs).model_dump()
+
+    def _materialize_post_variant(self, post: Dict[str, Any], slot_idx: int) -> Dict[str, Any]:
+        """
+        Generate deterministic variants by difficulty tier.
+        Easy remains close to canonical dataset examples.
+        """
+        variant = dict(post)
+        difficulty = post.get("difficulty", self.task)
+        original_text = str(post.get("text", ""))
+        text = original_text
+
+        if difficulty == "medium":
+            if self._rng.random() < 0.35:
+                text = self._inject_contextual_distractor(text)
+            if self._rng.random() < 0.25:
+                text = self._light_surface_noise(text)
+
+        elif difficulty == "hard":
+            if self._rng.random() < 0.65:
+                text = self._inject_conflicting_clause(text, post.get("correct_action", "flag"))
+            if self._rng.random() < 0.45:
+                text = self._light_surface_noise(text)
+            if self._rng.random() < 0.30:
+                text = self._inject_hashtag_noise(text)
+
+        variant["text"] = text
+        if text != original_text:
+            variant["reason"] = f"{post.get('reason', '')} [variant={slot_idx + 1}]"
+            variant["variant_applied"] = True
+        else:
+            variant["variant_applied"] = False
+        return variant
+
+    def _inject_contextual_distractor(self, text: str) -> str:
+        suffixes = [
+            "Context note: this post is circulating in local groups.",
+            "FYI this topic is currently trending in related communities.",
+            "Shared for discussion; some details may be incomplete.",
+        ]
+        return f"{text} {self._rng.choice(suffixes)}"
+
+    def _inject_conflicting_clause(self, text: str, correct_action: str) -> str:
+        if correct_action == "allow":
+            clauses = [
+                "Without context, this could still be misread by viewers.",
+                "Surface-level signals may look riskier than the underlying intent.",
+            ]
+        elif correct_action == "remove":
+            clauses = [
+                "Framed as humor, but still violating platform policy.",
+                "Packaged as awareness language despite clearly harmful cues.",
+            ]
+        else:
+            clauses = [
+                "Signals conflict and likely require human review.",
+                "Intent appears ambiguous across text and context.",
+            ]
+        return f"{text} {self._rng.choice(clauses)}"
+
+    def _inject_hashtag_noise(self, text: str) -> str:
+        tags = ["#context", "#viral", "#fyi", "#trending", "#awareness", "#justsaying"]
+        n = 1 if self._rng.random() < 0.7 else 2
+        chosen = " ".join(self._rng.sample(tags, n))
+        return f"{text} {chosen}"
+
+    def _light_surface_noise(self, text: str) -> str:
+        # Conservative perturbations: keep semantics while reducing overfitting
+        # to exact punctuation/casing.
+        noisy = text
+        noisy = re.sub(r"\s{2,}", " ", noisy)
+        noisy = re.sub(r"\.\.\.+", "...", noisy)
+        noisy = re.sub(r"!!!+", "!!", noisy)
+        if self._rng.random() < 0.35:
+            noisy = noisy.replace(" and ", " & ", 1)
+        if self._rng.random() < 0.25:
+            noisy = noisy.replace(" for ", " 4 ", 1)
+        return noisy
 
     def _coerce_action(
         self,
@@ -547,7 +633,7 @@ if __name__ == "__main__":
     print(env.render())
     print(f"Feature dim: {len(obs['features'])}")
     print(f"Obs space:   {env.observation_space}")
-    for step in range(8):
+    for step in range(env.max_steps):
         action = random.choice(["allow", "flag", "remove"])
         obs, r, done, info = env.step({"action": action, "confidence": 0.7})
         print(f"  step={step+1}  action={action:<6}  reward={r:+.3f}  correct={info['correct_action']}")

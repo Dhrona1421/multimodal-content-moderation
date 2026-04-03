@@ -18,6 +18,7 @@ Advanced (PPO training)
 >>> agent = make_ppo_agent(net)
 """
 from env      import ContentModerationEnv, VecContentModerationEnv
+from openenv_env import OpenEnvModerationEnv
 from tasks    import make_task, list_tasks, describe_task, TASKS
 from grader   import ModerationGrader
 from features import extract_features, FEATURE_DIM, ACTIONS
@@ -33,6 +34,7 @@ from schemas  import (
 __version__ = "3.0.0"
 __all__ = [
     "ContentModerationEnv",
+    "OpenEnvModerationEnv",
     "VecContentModerationEnv",
     "make_task",
     "list_tasks",

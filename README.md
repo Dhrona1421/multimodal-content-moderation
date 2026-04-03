@@ -288,6 +288,9 @@ The environment now captures and displays **Agent Reasoning** for every step. Ag
 - **Cross-Modal Conflict:** Detecting when text masks harmful imagery.
 This reasoning is visible live in the **Auto-Pilot** and **Play** tabs of the Gradio demo, transforming the agent from a "black box" into a transparent moderator.
 
+### 7. Procedural Episode Variants
+Medium and hard episodes apply deterministic, seed-controlled text perturbations (context distractors, conflicting clauses, light formatting noise). This prevents pure memorization of static samples while preserving reproducibility.
+
 ---
 
 ## 📊 Dataset (41 Posts)
@@ -328,9 +331,9 @@ Hand-crafted posts across 3 difficulty tiers designed to test reasoning, not key
 ```python
 from tasks import make_task
 
-env = make_task("easy")    # 14-post pool, obvious cases
-env = make_task("medium")  # 27-post pool, reasoning required
-env = make_task("hard")    # 41-post pool, full adversarial suite
+env = make_task("easy")    # easy-only pool (14 posts), sampled to episode length
+env = make_task("medium")  # medium-only pool (13 posts), sampled to episode length
+env = make_task("hard")    # hard-only pool (14 posts), sampled to episode length
 ```
 
 ---
@@ -407,6 +410,9 @@ python inference.py --seed 42 --verbose
 # Single task
 python inference.py --task hard --seed 42 --verbose
 
+# Run through deployed/local HTTP API endpoints instead of direct env calls
+python api_inference.py --base-url http://127.0.0.1:7860 --task hard --agent rule-based
+
 # Run local submission smoke checks
 python validate_submission.py
 
@@ -416,13 +422,17 @@ openenv validate --verbose
 # Run the OpenEnv server entrypoint directly
 uv run server
 
+# Launch API server directly (API-first default)
+python api.py
+
 # Train PPO from scratch (full curriculum)
 python train.py --updates 200
 
 # Evaluate saved checkpoint
 python train.py --eval-only --checkpoint ppo_checkpoint
 
-# Launch Gradio demo
+# Launch Gradio UI explicitly (optional)
+OPENENV_ENABLE_UI=1 \
 python app.py
 ```
 
@@ -505,6 +515,17 @@ obs, r, done, info = env.step({"action": "flag", "confidence": 0.75})
 obs            = env.state()        # OpenEnv spec: non-advancing read
 score          = env.compute_score()
 print(env.render())
+```
+
+### `OpenEnvModerationEnv` (strict canonical API)
+
+```python
+from openenv_env import OpenEnvModerationEnv
+
+env = OpenEnvModerationEnv(task="hard", seed=42, max_steps=12)
+obs = env.reset()
+obs, reward, done, info = env.step({"action": "flag", "confidence": 0.8})
+obs = env.state()
 ```
 
 ### `VecContentModerationEnv`
@@ -594,11 +615,14 @@ multimodal-content-moderation/
 |-- features.py               # 64-dim multimodal feature extractor
 |-- network.py                # Deep Actor-Critic MLP + Adam optimiser
 |-- env.py                    # OpenEnv-compliant RL environment (+ VecEnv)
+|-- openenv_env.py            # Strict reset()/step()/state() OpenEnv adapter
 |-- tasks.py                  # Task registry and make_task() factory
 |-- grader.py                 # Full grading engine with F1, ECE, FNR, fairness
 |-- inference.py              # LLM (CoT) agent + rule-based agent + eval runner
+|-- api_inference.py          # HTTP /reset+/step+/state agent loop runner
 |-- train.py                  # PPO-Clip trainer with GAE and curriculum learning
-|-- app.py                    # 6-tab Gradio demo for Hugging Face Spaces
+|-- app.py                    # API + optional 6-tab Gradio UI runtime
+|-- api.py                    # Dedicated API-only entrypoint
 |-- server/
 |   |-- __init__.py           # OpenEnv server package exports
 |   `-- app.py                # OpenEnv-compatible server entry point (main)
@@ -625,7 +649,7 @@ multimodal-content-moderation/
 ### Hugging Face Spaces (recommended)
 
 The `Dockerfile` is configured for HF Spaces:
-- Exposes port 7860 (Gradio default)
+- Exposes port 7860 (FastAPI API default)
 - Serves validator-compatible HTTP endpoints: `POST /reset`, `POST /step`, `GET /state`
 - Health-check validates environment integrity
 - Bundles the trained PPO checkpoints used by the UI and CLI evaluation
@@ -640,6 +664,8 @@ The `Dockerfile` is configured for HF Spaces:
 | `OPENAI_API_KEY` | *(unset)*                   | Fallback API key alias               |
 | `MODEL_NAME`  | `gpt-4o-mini`                  | Model identifier for OpenAI-compat API |
 | `API_BASE_URL`| `https://api.openai.com/v1`    | API base URL (supports any OpenAI-compat endpoint) |
+| `OPENENV_ENABLE_UI` | `0`                       | If `1`, mounts Gradio UI; default is API-only |
+| `OPENENV_API_ONLY` | *(optional override)*      | Legacy compatibility flag for create_app() |
 
 ### Submission Validator
 
@@ -653,9 +679,9 @@ Run the local validator script against the public Space URL:
 
 ## HTTP API
 
-The deployed Space exposes both the Gradio UI and the validator endpoints:
+The deployed Space exposes validator-compatible API endpoints by default:
 
-- `POST /reset` with optional JSON body: `{"task":"easy|medium|hard","seed":42,"max_steps":12}`
+- `POST /reset` with optional JSON body: `{"task":"easy|medium|hard","seed":42,"max_steps":12,"env_id":"optional"}`
 - `POST /step` with action payload: `{"action":"flag","confidence":0.78}`
 - `GET /state` to read the current observation without advancing
 - `GET /healthz` for a basic service check
@@ -663,6 +689,8 @@ The deployed Space exposes both the Gradio UI and the validator endpoints:
 - `GET /metadata` for environment metadata
 - `GET /schema` for action, observation, and state schemas
 - `POST /mcp` for the JSON-RPC compatibility check used by the OpenEnv runtime validator
+- Optional multi-session routing via `X-Env-Id` header (or `env_id` in request body/query)
+  - Use `env_id: "new"` on `/reset` to request a generated session id returned in `X-Env-Id`
 
 These endpoints return standard OpenEnv-style JSON responses and allow the official submission validator to ping the Space directly.
 

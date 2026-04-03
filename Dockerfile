@@ -50,12 +50,15 @@ COPY moderation_dataset.json .
 COPY features.py             .
 COPY network.py              .
 COPY env.py                  .
+COPY openenv_env.py          .
 COPY schemas.py              .
 COPY tasks.py                .
 COPY grader.py               .
 COPY inference.py            .
+COPY api_inference.py        .
 COPY train.py                .
 COPY app.py                  .
+COPY api.py                  .
 COPY __init__.py             .
 COPY pyproject.toml          .
 COPY uv.lock                 .
@@ -99,7 +102,7 @@ print('HEALTH OK') \
 "
 
 # ── Default: launch Gradio demo ───────────────────────────────────────────────
-CMD ["python", "app.py"]
+CMD ["python", "api.py"]
 
 # ── Override examples ─────────────────────────────────────────────────────────
 # docker run -e HF_TOKEN=sk-... -p 7860:7860 <image>           # LLM agent

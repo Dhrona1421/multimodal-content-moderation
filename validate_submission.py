@@ -10,6 +10,7 @@ from pathlib import Path
 
 from env import ContentModerationEnv
 from inference import run_inference
+from openenv_env import OpenEnvModerationEnv
 from schemas import ActionModel, ObservationModel, RewardModel, StepInfoModel
 from tasks import TASKS
 
@@ -20,7 +21,7 @@ def _assert(condition: bool, message: str) -> None:
 
 
 def check_environment_contract() -> None:
-    env = ContentModerationEnv(task="easy", seed=42)
+    env = OpenEnvModerationEnv(task="easy", seed=42)
     obs = env.reset()
     ObservationModel(**obs)
     _assert(obs["step"] == 1, "reset() must return the first observation")
@@ -60,6 +61,9 @@ def check_files() -> None:
         "README.md",
         "openenv.yaml",
         "inference.py",
+        "api_inference.py",
+        "api.py",
+        "openenv_env.py",
         "schemas.py",
     ]
     for name in required:

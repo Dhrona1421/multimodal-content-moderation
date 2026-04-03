@@ -25,8 +25,10 @@ models:
   info: schemas.StepInfoModel
 
 entry_points:
-  environment: env:ContentModerationEnv
+  environment: openenv_env:OpenEnvModerationEnv
   inference: inference.py
+  api_inference: api_inference.py
+  api: api.py
   demo: app.py
   validation: validate_submission.py
 
@@ -116,6 +118,8 @@ baseline:
     - MODEL_NAME
     - HF_TOKEN
     - OPENAI_API_KEY
+    - OPENENV_API_ONLY
+    - OPENENV_ENABLE_UI
 
 dependencies:
   required:
