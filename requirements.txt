@@ -1,0 +1,22 @@
+# ── Core runtime ─────────────────────────────────────────────────────────────
+numpy>=1.24.0
+scikit-learn>=1.2.0
+pydantic>=2.0.0
+fastapi>=0.110.0
+uvicorn>=0.29.0
+openenv-core>=0.2.3
+
+# ── LLM inference (optional — falls back to rule-based without it) ────────────
+openai>=1.0.0
+
+# ── Gradio demo ───────────────────────────────────────────────────────────────
+gradio>=4.0.0
+matplotlib>=3.7.0
+
+# ── Optional: PyTorch backend (drop-in replacement for network.py) ────────────
+torch>=2.0.0        # uncomment to enable GPU-accelerated training
+# torchvision>=0.15.0
+
+# ── Development / testing ─────────────────────────────────────────────────────
+# pytest>=7.0.0
+# black>=23.0.0

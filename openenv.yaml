@@ -1,0 +1,146 @@
+name: multimodal-content-moderation
+version: "3.0.0"
+license: MIT
+
+description: >
+  A real-world OpenEnv environment for multimodal social media content moderation.
+  Agents review text, image safety tags, user trust signals, and session history to
+  decide whether to allow, flag, or remove a post through a single standard action
+  payload, while calibrating confidence for human escalation.
+
+tags:
+  - openenv
+  - content-moderation
+  - multimodal
+  - reinforcement-learning
+  - safety
+  - trust-and-safety
+
+python_version: ">=3.11"
+
+models:
+  observation: schemas.ObservationModel
+  action: schemas.ActionModel
+  reward: schemas.RewardModel
+  info: schemas.StepInfoModel
+
+entry_points:
+  environment: openenv_env:OpenEnvModerationEnv
+  inference: inference.py
+  inference_eval: inference_eval.py
+  api_inference: api_inference.py
+  api: api.py
+  demo: app.py
+  validation: validate_submission.py
+
+actions:
+  type: object
+  required: [action]
+  properties:
+    action:
+      type: categorical
+      values: [allow, flag, remove]
+    confidence:
+      type: float
+      range: [0.0, 1.0]
+      default: 1.0
+      escalation_below: 0.45
+
+observation:
+  post_id:
+    type: integer
+  text:
+    type: string
+  image_tag:
+    type: categorical
+    values: [safe, nudity, violence, drugs, misleading]
+  user_type:
+    type: categorical
+    values: [new, trusted, suspicious]
+  difficulty:
+    type: categorical
+    values: [easy, medium, hard]
+  step:
+    type: integer
+    range: [1, 12]
+  max_steps:
+    type: integer
+    value: 12
+  user_history:
+    type: float
+    range: [0.0, 5.0]
+  session_stats:
+    type: object
+    keys: [correct, wrong, flagged, removed, escalated]
+  features:
+    type: array
+    shape: [64]
+    range: [0.0, 1.0]
+
+reward_range: [0.0, 1.0]
+score_range: [0.0, 1.0]
+done_condition: step_count_equals_max_steps
+api_contract:
+  reset: returns {observation, reward, done}
+  state: returns current observation without advancing, or {}
+  step: accepts ActionModel-compatible payload (canonical or flat) and returns {observation, reward, done}
+  session: supports env_id in body/query/header, lazy session creation, and /close lifecycle endpoint
+
+tasks:
+  easy:
+    description: Obvious aligned moderation cases.
+    reward_range: [0.0, 1.0]
+    expected_score_range: [0.0, 1.0]
+    deterministic_grader: true
+  medium:
+    description: Context-heavy moderation cases with ambiguity.
+    reward_range: [0.0, 1.0]
+    expected_score_range: [0.0, 1.0]
+    deterministic_grader: true
+  hard:
+    description: Adversarial cross-modal moderation cases.
+    reward_range: [0.0, 1.0]
+    expected_score_range: [0.0, 1.0]
+    deterministic_grader: true
+
+grader:
+  module: grader.py
+  task_registry: tasks.py
+  scoring:
+    primary: aggregate_score
+    per_task: score
+    deterministic: true
+
+baseline:
+  script: inference.py
+  command: python inference.py --task hard --rule-based --seed 42 --max-steps 12
+  reproducible: true
+  env_vars:
+    - API_BASE_URL
+    - MODEL_NAME
+    - HF_TOKEN
+    - OPENAI_API_KEY
+    - LOCAL_IMAGE_NAME
+    - OPENENV_API_ONLY
+
+dependencies:
+  required:
+    - numpy>=1.24.0
+    - scikit-learn>=1.2.0
+    - pydantic>=2.0.0
+    - fastapi>=0.110.0
+    - uvicorn>=0.29.0
+    - openenv-core>=0.2.3
+    - openai>=1.0.0
+    - gradio>=4.0.0
+    - matplotlib>=3.7.0
+  optional:
+    - torch>=2.0.0
+
+deployment:
+  dockerfile: Dockerfile
+  hf_space_sdk: docker
+  port: 7860
+
+validation:
+  local_smoke_script: validate_submission.py

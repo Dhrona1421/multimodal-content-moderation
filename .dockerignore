@@ -1,0 +1,16 @@
+.git
+.gitignore
+.idea
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.venv/
+.venv314/
+.venv_broken315/
+v2.tar.gz
+training_log.csv
+results.json
+gradio.err.log
+gradio.out.log
