@@ -25,7 +25,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import Body, FastAPI, HTTPException, status
 from pydantic import BaseModel, Field, ValidationError
-from schemas import ActionModel
 
 
 def _safe_emit(line: str, *, err: bool = False) -> None:
@@ -57,14 +56,10 @@ except Exception:
     OpenAI = None  # type: ignore[assignment, misc]
     _OPENAI_AVAILABLE = False
 
-# openenv_env may not resolve in every validation context.
-try:
-    from openenv_env import OpenEnvModerationEnv
-    _ENV_AVAILABLE = True
-except Exception as _env_err:
-    _debug(f"openenv_env import failed: {_env_err}")
-    OpenEnvModerationEnv = None  # type: ignore[assignment, misc]
-    _ENV_AVAILABLE = False
+# Environment class is resolved lazily to keep API startup fast and robust.
+_ENV_CLASS: Optional[Any] = None
+_ENV_SOURCE = "unresolved"
+_ENV_IMPORT_ERROR: Optional[str] = None
 
 
 # ── Runtime configuration ─────────────────────────────────────────────────────
@@ -189,16 +184,67 @@ class ResetRequest(BaseModel):
     seed: int = Field(default=DEFAULT_SEED)
     max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=64)
 
+class ActionPayloadModel(BaseModel):
+    action: str = Field(min_length=1)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    agent_reasoning: Optional[Dict[str, Any]] = None
+
 
 _API_LOCK = threading.Lock()
 _API_ENV: Optional[Any] = None
 
 
+def _resolve_env_class() -> Optional[Any]:
+    global _ENV_CLASS, _ENV_SOURCE, _ENV_IMPORT_ERROR
+    if _ENV_CLASS is not None:
+        return _ENV_CLASS
+
+    try:
+        from openenv_env import OpenEnvModerationEnv as canonical_env  # type: ignore[import]
+        _ENV_CLASS = canonical_env
+        _ENV_SOURCE = "openenv_env"
+        _ENV_IMPORT_ERROR = None
+        return _ENV_CLASS
+    except Exception as exc:  # noqa: BLE001
+        _ENV_IMPORT_ERROR = str(exc)
+        _debug(f"openenv_env import failed: {exc}")
+
+    try:
+        from env import ContentModerationEnv as fallback_env  # type: ignore[import]
+        _ENV_CLASS = fallback_env
+        _ENV_SOURCE = "env_fallback"
+        return _ENV_CLASS
+    except Exception as exc:  # noqa: BLE001
+        detail = f"openenv_env={_ENV_IMPORT_ERROR!r}; env={exc!r}"
+        _ENV_IMPORT_ERROR = detail
+        _debug(f"env fallback import failed: {detail}")
+        return None
+
+
+def _create_env(task: str, seed: int, max_steps: int) -> Any:
+    env_class = _resolve_env_class()
+    if env_class is None:
+        raise RuntimeError("environment unavailable")
+    return env_class(task=task, seed=seed, max_steps=max_steps)
+
+
+def _validate_action_payload(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    validate = getattr(ActionPayloadModel, "model_validate", None)
+    if callable(validate):
+        model = validate(candidate)
+        dump = getattr(model, "model_dump", None)
+        if callable(dump):
+            return dump(exclude_none=True)
+    model = ActionPayloadModel.parse_obj(candidate)
+    return model.dict(exclude_none=True)
+
+
 def _require_openenv() -> None:
-    if not _ENV_AVAILABLE or OpenEnvModerationEnv is None:
+    if _resolve_env_class() is None:
+        detail = _ENV_IMPORT_ERROR or "environment unavailable"
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="environment unavailable",
+            detail=detail,
         )
 
 
@@ -221,9 +267,10 @@ def _normalize_step_payload(step_body: Dict[str, Any]) -> Dict[str, Any]:
     if "action" not in candidate:
         raise ValueError("step payload must include 'action'")
 
-    candidate["action"] = _coerce_action(candidate.get("action"))
-    candidate["confidence"] = _coerce_confidence(candidate.get("confidence", 1.0), default=1.0)
-    return ActionModel.model_validate(candidate).model_dump(exclude_none=True)
+    validated = _validate_action_payload(candidate)
+    validated["action"] = _coerce_action(validated.get("action"))
+    validated["confidence"] = _coerce_confidence(validated.get("confidence", 1.0), default=1.0)
+    return validated
 
 
 app = FastAPI(title="OpenEnv Inference API", version="3.0.0")
@@ -242,15 +289,17 @@ def root() -> Dict[str, str]:
 
 @app.get("/health")
 @app.get("/healthz")
+@app.get("/healthcheck")
+@app.get("/livez")
 def health() -> Dict[str, str]:
     return {"status": "healthy"}
 
 
 @app.get("/ready")
 def ready() -> Dict[str, str]:
-    if _ENV_AVAILABLE and OpenEnvModerationEnv is not None:
-        return {"status": "ready"}
-    return {"status": "unready"}
+    if _resolve_env_class() is not None:
+        return {"status": "ready", "source": _ENV_SOURCE}
+    return {"status": "unready", "source": "none"}
 
 
 @app.post("/reset")
@@ -258,11 +307,7 @@ def reset(request: ResetRequest = Body(default_factory=ResetRequest)) -> Dict[st
     _require_openenv()
     global _API_ENV
     with _API_LOCK:
-        _API_ENV = OpenEnvModerationEnv(  # type: ignore[misc]
-            task=request.task,
-            seed=request.seed,
-            max_steps=request.max_steps,
-        )
+        _API_ENV = _create_env(task=request.task, seed=request.seed, max_steps=request.max_steps)
         observation = _API_ENV.reset()
     return {"observation": observation, "reward": None, "done": False}
 
@@ -289,11 +334,7 @@ def step(step_body: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, An
     global _API_ENV
     with _API_LOCK:
         if _API_ENV is None:
-            _API_ENV = OpenEnvModerationEnv(  # type: ignore[misc]
-                task=DEFAULT_TASK,
-                seed=DEFAULT_SEED,
-                max_steps=DEFAULT_MAX_STEPS,
-            )
+            _API_ENV = _create_env(task=DEFAULT_TASK, seed=DEFAULT_SEED, max_steps=DEFAULT_MAX_STEPS)
             _API_ENV.reset()
 
         if _API_ENV.state() == {}:
@@ -475,12 +516,12 @@ def main() -> None:
     log_start(task=args.task, env=args.benchmark, model=MODEL_NAME)
 
     try:
-        # Abort cleanly if the env class could not be imported
-        if not _ENV_AVAILABLE or OpenEnvModerationEnv is None:
+        # Abort cleanly if no supported environment class can be loaded.
+        if _resolve_env_class() is None:
             _debug("OpenEnvModerationEnv unavailable")
             return
 
-        env = OpenEnvModerationEnv(task=args.task, max_steps=args.max_steps, seed=args.seed)
+        env = _create_env(task=args.task, max_steps=args.max_steps, seed=args.seed)
         observation = env.reset()
 
         for step in range(1, args.max_steps + 1):
@@ -563,7 +604,7 @@ def run_inference(*args: Any, **kwargs: Any) -> Dict[str, Any]:
 # ── Entry point ───────────────────────────────────────────────────────────────
 # IMPORTANT: `python inference.py` runs the inference loop.
 # The FastAPI `app` object above is for `uvicorn inference:app`.
-if __name__ == "__main__":
+def _run_cli() -> None:
     try:
         main()
     except BaseException as exc:  # noqa: BLE001
@@ -572,3 +613,15 @@ if __name__ == "__main__":
         _safe_emit("[END] success=false steps=0 rewards=")
     finally:
         raise SystemExit(0)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    # Optional local CLI mode
+    if "--cli" in sys.argv:
+        sys.argv = [arg for arg in sys.argv if arg != "--cli"]
+        _run_cli()
+
+    # Default validator-safe mode
+    uvicorn.run("inference:app", host="0.0.0.0", port=int(os.getenv("PORT", "7860")))

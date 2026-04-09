@@ -37,8 +37,76 @@ try:
     )
 except ImportError:
     # Fallback for isolated validation environments
-    FEATURE_DIM = 128
+    FEATURE_DIM = 64
     ACTIONS = ["allow", "flag", "remove"]
+
+    def extract_features(_obs: Dict[str, Any]) -> np.ndarray:
+        return np.zeros(FEATURE_DIM, dtype=np.float32)
+
+    def _to_plain(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {k: _to_plain(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_to_plain(v) for v in value]
+        if hasattr(value, "model_dump") and callable(getattr(value, "model_dump")):
+            try:
+                return value.model_dump()
+            except Exception:
+                pass
+        if hasattr(value, "dict") and callable(getattr(value, "dict")):
+            try:
+                return value.dict()
+            except Exception:
+                pass
+        return value
+
+    class _CompatModel:
+        def model_dump(self) -> Dict[str, Any]:
+            return {k: _to_plain(v) for k, v in self.__dict__.items()}
+
+        def dict(self) -> Dict[str, Any]:
+            return self.model_dump()
+
+    class SessionStatsModel(_CompatModel):
+        def __init__(self, **kwargs: Any) -> None:
+            self.correct = int(kwargs.get("correct", 0))
+            self.wrong = int(kwargs.get("wrong", 0))
+            self.flagged = int(kwargs.get("flagged", 0))
+            self.removed = int(kwargs.get("removed", 0))
+            self.escalated = int(kwargs.get("escalated", 0))
+
+    class ActionModel(_CompatModel):
+        def __init__(
+            self,
+            action: str,
+            confidence: float = 1.0,
+            agent_reasoning: Optional[Dict[str, Any]] = None,
+            **_: Any,
+        ) -> None:
+            action_value = str(action).strip().lower()
+            if action_value not in ACTIONS:
+                raise ValueError(f"invalid action: {action_value}")
+            try:
+                conf = float(confidence)
+            except (TypeError, ValueError):
+                conf = 1.0
+            self.action = action_value
+            self.confidence = float(np.clip(conf, 0.0, 1.0))
+            if agent_reasoning is not None and not isinstance(agent_reasoning, dict):
+                agent_reasoning = {"reasoning": str(agent_reasoning)}
+            self.agent_reasoning = agent_reasoning
+
+    class ObservationModel(_CompatModel):
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    class RewardModel(_CompatModel):
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
+
+    class StepInfoModel(_CompatModel):
+        def __init__(self, **kwargs: Any) -> None:
+            self.__dict__.update(kwargs)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. REWARD CONFIGURATION & SEVERITY MATRIX
@@ -508,7 +576,11 @@ class ContentModerationEnv:
                 agent_reasoning=agent_reasoning,
             )
         if isinstance(action, str):
-            return ActionModel(action=action.strip().lower(), confidence=1.0, agent_reasoning="Direct choice")
+            return ActionModel(
+                action=action.strip().lower(),
+                confidence=1.0,
+                agent_reasoning={"reasoning": "Direct choice"},
+            )
         raise ValueError("Unsupported action payload type.")
 
     @property

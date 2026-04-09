@@ -85,20 +85,17 @@ COPY ppo_checkpoint_final.npz ./ppo_checkpoint_final.npz
 ENV MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"
 ENV API_BASE_URL="https://router.huggingface.co/v1"
 ENV OPENENV_API_ONLY="1"
+ENV PORT="7860"
 
 # ── Gradio port ───────────────────────────────────────────────────────────────
 EXPOSE 7860
 
 # ── Health check ─────────────────────────────────────────────────────────────
 HEALTHCHECK --interval=30s --timeout=15s --start-period=10s --retries=3 \
-    CMD python -c " \
-import urllib.request, sys; \
-resp = urllib.request.urlopen('http://127.0.0.1:7860/health', timeout=5); \
-sys.exit(0 if resp.status == 200 else 1) \
-"
+    CMD python -c "import os,urllib.request,sys; p=os.getenv('PORT','7860'); resp=urllib.request.urlopen(f'http://127.0.0.1:{p}/health', timeout=5); sys.exit(0 if resp.status == 200 else 1)"
 
 # ── Default: launch API entrypoint (fast startup for validators) ─────────────
-CMD ["uvicorn", "inference:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["python", "inference.py"]
 
 # ── Override examples ─────────────────────────────────────────────────────────
 # docker run -e HF_TOKEN=sk-... -p 7860:7860 <image>           # LLM agent
