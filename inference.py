@@ -20,7 +20,12 @@ import json
 import os
 import re
 import sys
+import threading
 from typing import Any, Dict, List, Optional, Tuple
+
+from fastapi import Body, FastAPI, HTTPException, status
+from pydantic import BaseModel, Field, ValidationError
+from schemas import ActionModel
 
 
 def _safe_emit(line: str, *, err: bool = False) -> None:
@@ -46,10 +51,10 @@ def _debug(message: str) -> None:
 # ── Guarded optional imports ──────────────────────────────────────────────────
 # openai is optional — falls back to rule-based when absent or unconfigured.
 try:
-    from openai import OpenAI as _OpenAI
+    from openai import OpenAI
     _OPENAI_AVAILABLE = True
 except Exception:
-    _OpenAI = None  # type: ignore[assignment, misc]
+    OpenAI = None  # type: ignore[assignment, misc]
     _OPENAI_AVAILABLE = False
 
 # openenv_env may not resolve in every validation context.
@@ -85,10 +90,10 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME", os.getenv("IMAGE_NAME", ""))
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
-HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 DEFAULT_TASK = os.getenv("OPENENV_TASK", "hard")
 DEFAULT_BENCHMARK = os.getenv("OPENENV_BENCHMARK", "multimodal-content-moderation")
@@ -115,7 +120,7 @@ def _build_client() -> Optional[Any]:
     if not _OPENAI_AVAILABLE or not HF_TOKEN:
         return None
     try:
-        return _OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+        return OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
     except Exception as exc:
         _debug(f"OpenAI client init failed: {exc}")
         return None
@@ -176,6 +181,132 @@ def _build_user_prompt(obs: Dict[str, Any], history: List[str]) -> str:
         f"recent_actions={history_tail}\n"
         "Return JSON only."
     )
+
+
+# FastAPI endpoints for `uvicorn inference:app`.
+class ResetRequest(BaseModel):
+    task: str = Field(default=DEFAULT_TASK, pattern="^(easy|medium|hard)$")
+    seed: int = Field(default=DEFAULT_SEED)
+    max_steps: int = Field(default=DEFAULT_MAX_STEPS, ge=1, le=64)
+
+
+_API_LOCK = threading.Lock()
+_API_ENV: Optional[Any] = None
+
+
+def _require_openenv() -> None:
+    if not _ENV_AVAILABLE or OpenEnvModerationEnv is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="environment unavailable",
+        )
+
+
+def _normalize_step_payload(step_body: Dict[str, Any]) -> Dict[str, Any]:
+    payload = dict(step_body or {})
+    nested_action = payload.get("action")
+
+    if isinstance(nested_action, dict):
+        candidate: Dict[str, Any] = dict(nested_action)
+        for key in ("confidence", "agent_reasoning"):
+            if key in payload and key not in candidate:
+                candidate[key] = payload[key]
+    else:
+        candidate = {
+            key: payload[key]
+            for key in ("action", "confidence", "agent_reasoning")
+            if key in payload
+        }
+
+    if "action" not in candidate:
+        raise ValueError("step payload must include 'action'")
+
+    candidate["action"] = _coerce_action(candidate.get("action"))
+    candidate["confidence"] = _coerce_confidence(candidate.get("confidence", 1.0), default=1.0)
+    return ActionModel.model_validate(candidate).model_dump(exclude_none=True)
+
+
+app = FastAPI(title="OpenEnv Inference API", version="3.0.0")
+
+
+@app.get("/")
+def root() -> Dict[str, str]:
+    return {
+        "status": "ready",
+        "health": "/health",
+        "reset": "/reset",
+        "step": "/step",
+        "state": "/state",
+    }
+
+
+@app.get("/health")
+@app.get("/healthz")
+def health() -> Dict[str, str]:
+    return {"status": "healthy"}
+
+
+@app.get("/ready")
+def ready() -> Dict[str, str]:
+    if _ENV_AVAILABLE and OpenEnvModerationEnv is not None:
+        return {"status": "ready"}
+    return {"status": "unready"}
+
+
+@app.post("/reset")
+def reset(request: ResetRequest = Body(default_factory=ResetRequest)) -> Dict[str, Any]:
+    _require_openenv()
+    global _API_ENV
+    with _API_LOCK:
+        _API_ENV = OpenEnvModerationEnv(  # type: ignore[misc]
+            task=request.task,
+            seed=request.seed,
+            max_steps=request.max_steps,
+        )
+        observation = _API_ENV.reset()
+    return {"observation": observation, "reward": None, "done": False}
+
+
+@app.get("/state")
+@app.post("/state")
+def state_endpoint() -> Dict[str, Any]:
+    with _API_LOCK:
+        if _API_ENV is None:
+            return {}
+        return _API_ENV.state()
+
+
+@app.post("/step")
+def step(step_body: Dict[str, Any] = Body(default_factory=dict)) -> Dict[str, Any]:
+    _require_openenv()
+    try:
+        action_payload = _normalize_step_payload(step_body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.errors()) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    global _API_ENV
+    with _API_LOCK:
+        if _API_ENV is None:
+            _API_ENV = OpenEnvModerationEnv(  # type: ignore[misc]
+                task=DEFAULT_TASK,
+                seed=DEFAULT_SEED,
+                max_steps=DEFAULT_MAX_STEPS,
+            )
+            _API_ENV.reset()
+
+        if _API_ENV.state() == {}:
+            _API_ENV.reset()
+
+        observation, reward, done, info = _API_ENV.step(action_payload)
+
+    return {
+        "observation": observation,
+        "reward": float(reward),
+        "done": bool(done),
+        "info": dict(info),
+    }
 
 
 # ── Agents ────────────────────────────────────────────────────────────────────
@@ -430,8 +561,8 @@ def run_inference(*args: Any, **kwargs: Any) -> Dict[str, Any]:
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-# IMPORTANT: `python inference.py` MUST run the inference loop, NOT a web server.
-# The web server lives in app.py. Do NOT put uvicorn.run() here.
+# IMPORTANT: `python inference.py` runs the inference loop.
+# The FastAPI `app` object above is for `uvicorn inference:app`.
 if __name__ == "__main__":
     try:
         main()

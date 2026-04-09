@@ -7,7 +7,7 @@
 #   Stage 2 (runtime) — slim final image, no build tools
 #
 # Ports:  7860 (OpenEnv API)
-# CMD:    python api.py     → API-first startup (validator-safe default)
+# CMD:    uvicorn inference:app --host 0.0.0.0 --port 7860
 #         python inference.py --rule-based --verbose
 #         python train.py --updates 200
 #         python train.py --eval-only --checkpoint ppo_checkpoint_best
@@ -98,7 +98,7 @@ sys.exit(0 if resp.status == 200 else 1) \
 "
 
 # ── Default: launch API entrypoint (fast startup for validators) ─────────────
-CMD ["python", "api.py"]
+CMD ["uvicorn", "inference:app", "--host", "0.0.0.0", "--port", "7860"]
 
 # ── Override examples ─────────────────────────────────────────────────────────
 # docker run -e HF_TOKEN=sk-... -p 7860:7860 <image>           # LLM agent
