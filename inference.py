@@ -616,6 +616,4 @@ def _run_cli() -> None:
 
 
 if __name__ == "__main__":
-    if "--cli" in sys.argv:
-        sys.argv = [arg for arg in sys.argv if arg != "--cli"]
-        _run_cli()
+    _run_cli()
