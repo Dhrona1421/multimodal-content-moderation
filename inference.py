@@ -121,10 +121,6 @@ def _build_client() -> Optional[Any]:
         return None
 
 
-DEFAULT_CLIENT = _build_client()
-LLM_AVAILABLE  = DEFAULT_CLIENT is not None
-
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def _to_bool_str(value: bool) -> str:
     return "true" if value else "false"
