@@ -525,7 +525,7 @@ class ContentModerationEnv:
         Guaranteed to be strictly within (0.0, 1.0).
         """
         if not self.episode_rewards:
-        return 0.0001
+          return 0.0001
 
         avg_reward = sum(self.episode_rewards) / len(self.episode_rewards)
 
