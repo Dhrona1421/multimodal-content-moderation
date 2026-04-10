@@ -129,6 +129,9 @@ def _build_client() -> Optional[Any]:
         return None
 
 
+# ✅ ADD THIS
+DEFAULT_CLIENT = _build_client()
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def _to_bool_str(value: bool) -> str:
     return "true" if value else "false"
@@ -474,7 +477,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--benchmark",         default=DEFAULT_BENCHMARK)
     parser.add_argument("--seed",              type=int,   default=DEFAULT_SEED)
     parser.add_argument("--max-steps",         type=int,   default=DEFAULT_MAX_STEPS)
-    parser.add_argument("--agent",             choices=["llm", "rule-based"], default="rule-based")
+    parser.add_argument("--agent", choices=["llm", "rule-based"], default="llm")
     parser.add_argument("--rule-based",        action="store_true")
     parser.add_argument("--temperature",       type=float, default=DEFAULT_TEMPERATURE)
     parser.add_argument("--max-tokens",        type=int,   default=DEFAULT_MAX_TOKENS)
@@ -500,8 +503,8 @@ def main() -> None:
         benchmark=DEFAULT_BENCHMARK,
         seed=DEFAULT_SEED,
         max_steps=DEFAULT_MAX_STEPS,
-        agent="rule-based",
-        rule_based=True,
+        agent="llm",
+        rule_based=False,
         temperature=DEFAULT_TEMPERATURE,
         max_tokens=DEFAULT_MAX_TOKENS,
         success_threshold=DEFAULT_SUCCESS_THRESHOLD,
@@ -513,9 +516,6 @@ def main() -> None:
         args = parsed_args
     except BaseException as exc:  # noqa: BLE001
         _debug(f"argument parsing failed: {exc}")
-
-    if getattr(args, "rule_based", False):
-        args.agent = "rule-based"
 
     log_start(task=args.task, env=args.benchmark, model=MODEL_NAME)
 
