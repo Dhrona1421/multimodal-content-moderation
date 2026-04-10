@@ -525,7 +525,7 @@ class ContentModerationEnv:
         Guaranteed to be within [0.0, 1.0].
         """
         if not self.episode_rewards:
-            return 0.0
+            return 0.0001
 
         avg_reward = sum(self.episode_rewards) / len(self.episode_rewards)
 
@@ -607,8 +607,8 @@ class ContentModerationEnv:
             "api_version": self.API_VERSION,
             "step_accepts": "ActionModel-compatible payload",
             "actions": list(self.ACTIONS),
-            "reward_range": [0.0, 1.0],
-            "score_range": [0.0, 1.0],
+            "reward_range": [0.0001, 0.9999],
+            "score_range": [0.0001, 0.9999],
             "observation_space": self.observation_space,
             "done_condition": "step_count_equals_max_steps",
         }
