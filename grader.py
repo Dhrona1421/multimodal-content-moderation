@@ -45,17 +45,18 @@ class ModerationGrader:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def grade_all_tasks(self, agent_fn: Callable) -> Dict[str, Any]:
-        task_results: Dict[str, Dict] = {}
-        for task_name in TASKS:
-            env = make_task(task_name, self.dataset_path, self.seed)
-            task_results[task_name] = self._run_task(env, task_name, agent_fn)
+   def grade_all_tasks(self, agent_fn: Callable) -> Dict[str, Any]:
+    task_results: Dict[str, Dict] = {}
 
-        aggregate = round(
-            sum(t["score"] for t in task_results.values()) / len(task_results), 4
+    for task_name in TASKS:
+        env = make_task(task_name, self.dataset_path, self.seed)
+        task_results[task_name] = self._run_task(env, task_name, agent_fn)
+
+    aggregate = round(
+        sum(t["score"] for t in task_results.values()) / len(task_results), 4
     )
 
-    # ✅ STRICT CLAMP (VERY IMPORTANT)
+    # ✅ STRICT CLAMP (INSIDE FUNCTION)
     aggregate = min(max(float(aggregate), 0.0001), 0.9999)
 
     return {
