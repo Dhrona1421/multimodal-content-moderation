@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openenv-multimodal-content-moderation"
+version = "3.0.0"
+description = "A real-world OpenEnv environment for multimodal content moderation."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "OpenEnv Hackathon Submission" }
+]
+keywords = ["openenv", "content-moderation", "multimodal", "reinforcement-learning"]
+dependencies = [
+  "numpy>=1.24.0",
+  "scikit-learn>=1.2.0",
+  "pydantic>=2.0.0",
+  "fastapi>=0.110.0",
+  "uvicorn>=0.29.0",
+  "openenv-core>=0.2.3",
+  "openai>=1.0.0",
+  "gradio>=4.0.0",
+  "matplotlib>=3.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+]
+
+[project.scripts]
+server = "server.app:main"
+api-server = "api:main"
+
+[project.urls]
+Homepage = "https://huggingface.co"
+Repository = "https://huggingface.co"
+
+[tool.setuptools]
+py-modules = [
+  "api",
+  "api_inference",
+  "app",
+  "env",
+  "features",
+  "grader",
+  "inference",
+  "inference_eval",
+  "network",
+  "openenv_env",
+  "schemas",
+  "tasks",
+  "train",
+  "validate_submission",
+]
+
+[tool.setuptools.packages.find]
+include = ["server*"]
