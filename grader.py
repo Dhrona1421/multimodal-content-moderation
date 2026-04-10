@@ -2,15 +2,15 @@
 grader.py — Advanced grading engine for the Content Moderation Environment.
 
 Computes:
-  • Per-task scores (0–1) and aggregate
-  • Confusion matrix (3×3) across allow/flag/remove
-  • Per-class precision, recall, F1
-  • Macro-F1 and weighted-F1
-  • Per-category breakdowns (by image_tag, user_type, difficulty)
-  • Expected Calibration Error (ECE)
-  • False-negative rate on high-risk content
-  • Fairness gap across user types
-  • Human-readable report + machine-readable dict
+• Per-task scores (0–1) and aggregate
+• Confusion matrix (3×3) across allow/flag/remove
+• Per-class precision, recall, F1
+• Macro-F1 and weighted-F1
+• Per-category breakdowns (by image_tag, user_type, difficulty)
+• Expected Calibration Error (ECE)
+• False-negative rate on high-risk content
+• Fairness gap across user types
+• Human-readable report + machine-readable dict
 """
 
 from __future__ import annotations
@@ -22,11 +22,20 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from env   import ContentModerationEnv
+from env import ContentModerationEnv
 from tasks import TASKS, make_task
 
-ACTIONS     = ["allow", "flag", "remove"]
-ACTION_IDX  = {a: i for i, a in enumerate(ACTIONS)}
+ACTIONS = ["allow", "flag", "remove"]
+ACTION_IDX = {a: i for i, a in enumerate(ACTIONS)}
+
+# Score must be strictly inside (0, 1) — validator rejects 0.0 and 1.0
+_SCORE_MIN = 0.0001
+_SCORE_MAX = 0.9999
+
+
+def _clamp_score(score: float) -> float:
+    """Clamp score to strictly open interval (0.0001, 0.9999)."""
+    return round(float(np.clip(score, _SCORE_MIN, _SCORE_MAX)), 4)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -43,18 +52,16 @@ class ModerationGrader:
         self.dataset_path = dataset_path
         self.seed = seed
 
-    # ✅ NOW INSIDE CLASS
+    # ── Public API ────────────────────────────────────────────────────────────
+
     def grade_all_tasks(self, agent_fn: Callable) -> Dict[str, Any]:
         task_results: Dict[str, Dict] = {}
-
         for task_name in TASKS:
             env = make_task(task_name, self.dataset_path, self.seed)
             task_results[task_name] = self._run_task(env, task_name, agent_fn)
 
-        aggregate = round(
-            sum(t["score"] for t in task_results.values()) / len(task_results), 4
-        )
-        aggregate = min(max(float(aggregate), 0.0001), 0.9999)
+        raw_aggregate = sum(t["score"] for t in task_results.values()) / len(task_results)
+        aggregate = _clamp_score(raw_aggregate)
 
         return {
             "aggregate_score": aggregate,
@@ -65,7 +72,7 @@ class ModerationGrader:
     def grade_single_task(
         self,
         task_name: str,
-        agent_fn:  Callable,
+        agent_fn: Callable,
     ) -> Dict[str, Any]:
         env = make_task(task_name, self.dataset_path, self.seed)
         return self._run_task(env, task_name, agent_fn)
@@ -74,20 +81,21 @@ class ModerationGrader:
 
     def _run_task(
         self,
-        env:       ContentModerationEnv,
+        env: ContentModerationEnv,
         task_name: str,
-        agent_fn:  Callable,
+        agent_fn: Callable,
     ) -> Dict[str, Any]:
-        obs            = env.reset()
-        step_results:  List[Dict] = []
-        total_reward   = 0.0
-        conf_pairs:    List[Tuple[float, float]] = []   # (confidence, is_correct)
-        y_true:        List[int]  = []
-        y_pred:        List[int]  = []
+        obs = env.reset()
+        step_results: List[Dict] = []
+        total_reward = 0.0
+        conf_pairs: List[Tuple[float, float]] = []  # (confidence, is_correct)
+        y_true: List[int] = []
+        y_pred: List[int] = []
 
         for step_idx in range(env.max_steps):
             if not obs:
                 break
+
             raw = agent_fn(obs)
             if isinstance(raw, dict):
                 action_payload = raw
@@ -102,57 +110,53 @@ class ModerationGrader:
             obs, reward, done, info = env.step(action_payload)
             total_reward += reward
             conf_pairs.append((confidence, float(info["is_correct"])))
-            # Use safe lookup for action indices; -1 signals invalid action
-            true_idx = ACTION_IDX.get(info["correct_action"], -1)
-            pred_idx = ACTION_IDX.get(info["agent_action"], -1)
-            if true_idx == -1 or pred_idx == -1:
-                print(f"⚠ Warning: Invalid action in step {step_idx}: "
-                      f"correct={info['correct_action']}, agent={info['agent_action']}")
-            y_true.append(max(true_idx, 0))  # Fallback to 0 (allow) if invalid
-            y_pred.append(max(pred_idx, 0))
-
+            y_true.append(ACTION_IDX.get(info["correct_action"], 1))
+            y_pred.append(ACTION_IDX.get(info["agent_action"], 1))
             step_results.append({
-                "step":           step_idx + 1,
-                "post_id":        info["post_id"],
-                "agent_action":   info["agent_action"],
+                "step": step_idx + 1,
+                "post_id": info["post_id"],
+                "agent_action": info["agent_action"],
                 "correct_action": info["correct_action"],
-                "confidence":     round(confidence, 3),
-                "escalated":      info["escalated"],
-                "reward":         info["reward"],
-                "is_correct":     info["is_correct"],
-                "difficulty":     info["difficulty"],
-                "image_tag":      info["image_tag"],
-                "user_type":      info["user_type"],
-                "reason":         info["reason"],
+                "confidence": round(confidence, 3),
+                "escalated": info["escalated"],
+                "reward": info["reward"],
+                "is_correct": info["is_correct"],
+                "difficulty": info["difficulty"],
+                "image_tag": info["image_tag"],
+                "user_type": info["user_type"],
+                "reason": info["reason"],
             })
             if done:
                 break
 
-        n          = len(step_results)
-        score      = env.compute_score()
-        score      = min(max(float(score), 0.0001), 0.9999)
-        correct    = sum(1 for r in step_results if r["is_correct"])
-        cm         = _confusion_matrix(y_true, y_pred, len(ACTIONS))
+        n = len(step_results)
+
+        # Clamp the score from env to be safe, even if env already clamps it
+        raw_score = env.compute_score()
+        score = _clamp_score(raw_score)
+
+        correct = sum(1 for r in step_results if r["is_correct"])
+        cm = _confusion_matrix(y_true, y_pred, len(ACTIONS))
         clf_report = _classification_report(cm)
-        ece        = _expected_calibration_error(conf_pairs)
-        fnr        = _false_negative_rate(step_results)
+        ece = _expected_calibration_error(conf_pairs)
+        fnr = _false_negative_rate(step_results)
         breakdowns = _per_category_accuracy(step_results)
-        fairness   = _fairness_gap(breakdowns.get("user_type", {}))
+        fairness = _fairness_gap(breakdowns.get("user_type", {}))
 
         return {
-            "task":             task_name,
-            "score":            score,
-            "total_reward":     round(total_reward, 4),
-            "accuracy":         round(correct / max(n, 1), 4),
-            "correct":          correct,
-            "steps":            n,
+            "task": task_name,
+            "score": score,  # guaranteed strictly in (0.0001, 0.9999)
+            "total_reward": round(total_reward, 4),
+            "accuracy": round(correct / max(n, 1), 4),
+            "correct": correct,
+            "steps": n,
             "confusion_matrix": cm.tolist(),
-            "classification":   clf_report,
-            "ece":              ece,
-            "fnr_high_risk":    fnr,
-            "breakdowns":       breakdowns,
-            "fairness_gap":     fairness,
-            "step_results":     step_results,
+            "classification": clf_report,
+            "ece": ece,
+            "fnr_high_risk": fnr,
+            "breakdowns": breakdowns,
+            "fairness_gap": fairness,
+            "step_results": step_results,
         }
 
     # ── Summary builder ───────────────────────────────────────────────────────
@@ -160,38 +164,38 @@ class ModerationGrader:
     def _build_summary(
         self, task_results: Dict[str, Dict], aggregate: float
     ) -> str:
-        sep  = "═" * 78
+        sep = "═" * 78
         dash = "─" * 78
         lines = [
             sep,
-            "  MULTIMODAL CONTENT MODERATION  —  GRADER REPORT",
+            " MULTIMODAL CONTENT MODERATION — GRADER REPORT",
             sep,
-            f"  {'TASK':<10}  {'SCORE':>7}  {'ACC':>6}  {'MACRO-F1':>9}  "
-            f"{'ECE':>6}  {'FNR':>6}  {'FAIR-Δ':>7}  {'CORRECT':>8}",
+            f" {'TASK':<10} {'SCORE':>7} {'ACC':>6} {'MACRO-F1':>9} "
+            f"{'ECE':>6} {'FNR':>6} {'FAIR-Δ':>7} {'CORRECT':>8}",
             dash,
         ]
         for tn, data in task_results.items():
-            clf  = data["classification"]
+            clf = data["classification"]
             lines.append(
-                f"  {tn.upper():<10}  "
-                f"{data['score']:>7.4f}  "
-                f"{data['accuracy']:>6.2%}  "
-                f"{clf['macro_f1']:>9.4f}  "
-                f"{data['ece']:>6.4f}  "
-                f"{data['fnr_high_risk']:>6.4f}  "
-                f"{data['fairness_gap']:>7.4f}  "
+                f" {tn.upper():<10} "
+                f"{data['score']:>7.4f} "
+                f"{data['accuracy']:>6.2%} "
+                f"{clf['macro_f1']:>9.4f} "
+                f"{data['ece']:>6.4f} "
+                f"{data['fnr_high_risk']:>6.4f} "
+                f"{data['fairness_gap']:>7.4f} "
                 f"{data['correct']:>3}/{data['steps']:<3}"
             )
         lines += [
             dash,
-            f"  {'AGGREGATE':<10}  {aggregate:>7.4f}",
+            f" {'AGGREGATE':<10} {aggregate:>7.4f}",
             sep,
         ]
         return "\n".join(lines)
 
     def print_report(
         self,
-        report:  Dict[str, Any],
+        report: Dict[str, Any],
         verbose: bool = False,
     ) -> None:
         print(report["summary"])
@@ -201,58 +205,52 @@ class ModerationGrader:
 
     def _print_task_detail(self, task_name: str, data: Dict) -> None:
         print(f"\n{'─'*78}")
-        print(f"  [{task_name.upper()}] Detailed breakdown")
+        print(f" [{task_name.upper()}] Detailed breakdown")
         print(f"{'─'*78}")
 
-        # Confusion matrix
-        cm    = np.array(data["confusion_matrix"])
-        clf   = data["classification"]
+        cm = np.array(data["confusion_matrix"])
+        clf = data["classification"]
         print(f"\n  Confusion Matrix (rows=true, cols=pred):")
-        print(f"  {'':10s}  " + "  ".join(f"pred:{a:<6}" for a in ACTIONS))
+        print(f"  {'':10s} " + " ".join(f"pred:{a:<6}" for a in ACTIONS))
         for i, action in enumerate(ACTIONS):
-            row = "  ".join(f"{cm[i,j]:>12d}" for j in range(len(ACTIONS)))
-            print(f"  true:{action:<6s}  {row}")
+            row = " ".join(f"{cm[i,j]:>12d}" for j in range(len(ACTIONS)))
+            print(f"  true:{action:<6s} {row}")
 
-        # Per-class metrics
         print(f"\n  Per-class metrics:")
-        print(f"  {'Action':<8}  {'Prec':>6}  {'Rec':>6}  {'F1':>6}  {'Sup':>5}")
+        print(f"  {'Action':<8} {'Prec':>6} {'Rec':>6} {'F1':>6} {'Sup':>5}")
         for a in ACTIONS:
             m = clf["per_class"][a]
-            print(f"  {a:<8}  {m['precision']:>6.3f}  {m['recall']:>6.3f}  "
-                  f"{m['f1']:>6.3f}  {m['support']:>5d}")
-        print(f"  {'macro':>8}  {'─':>6}  {'─':>6}  {clf['macro_f1']:>6.3f}")
-        print(f"  {'weighted':>8}  {'─':>6}  {'─':>6}  {clf['weighted_f1']:>6.3f}")
+            print(f"  {a:<8} {m['precision']:>6.3f} {m['recall']:>6.3f} "
+                  f"{m['f1']:>6.3f} {m['support']:>5d}")
+        print(f"  {'macro':>8} {'─':>6} {'─':>6} {clf['macro_f1']:>6.3f}")
+        print(f"  {'weighted':>8} {'─':>6} {'─':>6} {clf['weighted_f1']:>6.3f}")
 
-        # Breakdowns
         bd = data["breakdowns"]
         if "difficulty" in bd:
             print(f"\n  Accuracy by difficulty:")
             for d, acc in bd["difficulty"].items():
                 bar = "█" * int(acc * 20) + "░" * (20 - int(acc * 20))
-                print(f"    {d:<8}: {bar} {acc:.2%}")
-
+                print(f"  {d:<8}: {bar} {acc:.2%}")
         if "image_tag" in bd:
             print(f"\n  Accuracy by image tag:")
             for tag, acc in sorted(bd["image_tag"].items()):
                 bar = "█" * int(acc * 20) + "░" * (20 - int(acc * 20))
-                print(f"    {tag:<12}: {bar} {acc:.2%}")
-
+                print(f"  {tag:<12}: {bar} {acc:.2%}")
         if "user_type" in bd:
             print(f"\n  Accuracy by user type:")
             for ut, acc in bd["user_type"].items():
                 bar = "█" * int(acc * 20) + "░" * (20 - int(acc * 20))
-                print(f"    {ut:<12}: {bar} {acc:.2%}")
+                print(f"  {ut:<12}: {bar} {acc:.2%}")
 
-        print(f"\n  ECE (calibration):        {data['ece']:.4f}  (↓ better)")
-        print(f"  FNR on high-risk content: {data['fnr_high_risk']:.4f}  (↓ better)")
-        print(f"  Fairness gap (user types):{data['fairness_gap']:.4f}  (↓ better)")
+        print(f"\n  ECE (calibration): {data['ece']:.4f} (↓ better)")
+        print(f"  FNR on high-risk content: {data['fnr_high_risk']:.4f} (↓ better)")
+        print(f"  Fairness gap (user types):{data['fairness_gap']:.4f} (↓ better)")
 
-        # Step-by-step
         print(f"\n  Step-by-step:")
         for r in data["step_results"]:
             status = "✓" if r["is_correct"] else ("↗" if r["escalated"] else "✗")
             print(
-                f"    {status} {r['step']:>2} │ "
+                f"  {status} {r['step']:>2} │ "
                 f"{r['agent_action']:>6} │ correct:{r['correct_action']:>6} │ "
                 f"conf:{r['confidence']:.2f} │ r:{r['reward']:>+5.2f} │ "
                 f"[{r['image_tag']:<11}][{r['user_type']:<10}] │ "
@@ -272,37 +270,33 @@ def _confusion_matrix(y_true: List[int], y_pred: List[int], n: int) -> np.ndarra
 
 
 def _classification_report(cm: np.ndarray) -> Dict[str, Any]:
-    n     = cm.shape[0]
+    n = cm.shape[0]
     per_class: Dict[str, Dict] = {}
     precs, recs, f1s, sups = [], [], [], []
-
     for i, action in enumerate(ACTIONS):
-        tp  = int(cm[i, i])
-        fp  = int(cm[:, i].sum()) - tp
-        fn  = int(cm[i, :].sum()) - tp
+        tp = int(cm[i, i])
+        fp = int(cm[:, i].sum()) - tp
+        fn = int(cm[i, :].sum()) - tp
         sup = int(cm[i, :].sum())
-
-        prec  = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        rec   = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1    = (2 * prec * rec / (prec + rec)) if (prec + rec) > 0 else 0.0
-
+        prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        rec  = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1   = (2 * prec * rec / (prec + rec)) if (prec + rec) > 0 else 0.0
         per_class[action] = {
             "precision": round(prec, 4),
-            "recall":    round(rec, 4),
-            "f1":        round(f1, 4),
+            "recall":    round(rec,  4),
+            "f1":        round(f1,   4),
             "support":   sup,
         }
         precs.append(prec); recs.append(rec); f1s.append(f1); sups.append(sup)
 
-    macro_f1    = round(float(np.mean(f1s)), 4)
-    total       = sum(sups)
+    macro_f1 = round(float(np.mean(f1s)), 4)
+    total = sum(sups)
     weighted_f1 = round(
         float(sum(f * s for f, s in zip(f1s, sups)) / max(total, 1)), 4
     )
     overall_acc = round(
         float(cm.diagonal().sum() / max(cm.sum(), 1)), 4
     )
-
     return {
         "per_class":    per_class,
         "macro_f1":     macro_f1,
@@ -322,14 +316,14 @@ def _expected_calibration_error(
     for conf, correct in pairs:
         b = min(int(conf * n_bins), n_bins - 1)
         bins[b].append((conf, correct))
-    n   = len(pairs)
+    n = len(pairs)
     ece = 0.0
     for bp in bins.values():
         if not bp:
             continue
         avg_c = sum(p[0] for p in bp) / len(bp)
         avg_a = sum(p[1] for p in bp) / len(bp)
-        ece  += (len(bp) / n) * abs(avg_c - avg_a)
+        ece += (len(bp) / n) * abs(avg_c - avg_a)
     return round(ece, 4)
 
 
@@ -355,7 +349,6 @@ def _per_category_accuracy(step_results: List[Dict]) -> Dict[str, Dict[str, floa
         groups["difficulty"][r["difficulty"]].append(r["is_correct"])
         groups["image_tag"] [r["image_tag"]].append( r["is_correct"])
         groups["user_type"] [r["user_type"]].append( r["is_correct"])
-
     return {
         cat: {k: round(sum(v) / len(v), 4) for k, v in grp.items()}
         for cat, grp in groups.items()
@@ -377,9 +370,18 @@ def _fairness_gap(user_type_acc: Dict[str, float]) -> float:
 if __name__ == "__main__":
     import random as _r
     _rng = _r.Random(99)
+
     def random_agent(obs):
         return _rng.choice(["allow", "flag", "remove"]), 0.7
 
     grader = ModerationGrader()
     report = grader.grade_all_tasks(random_agent)
     grader.print_report(report, verbose="--verbose" in sys.argv)
+
+    # Verify scores are strictly inside (0, 1)
+    for task_name, task_data in report["tasks"].items():
+        s = task_data["score"]
+        assert 0.0 < s < 1.0, f"Score out of range for {task_name}: {s}"
+    assert 0.0 < report["aggregate_score"] < 1.0, \
+        f"Aggregate score out of range: {report['aggregate_score']}"
+    print("\n✅ All scores strictly in (0, 1) — validator will pass.")
