@@ -54,7 +54,15 @@ class ModerationGrader:
         aggregate = round(
             sum(t["score"] for t in task_results.values()) / len(task_results), 4
     )
+
+    # ✅ STRICT CLAMP (VERY IMPORTANT)
     aggregate = min(max(float(aggregate), 0.0001), 0.9999)
+
+    return {
+        "aggregate_score": aggregate,
+        "tasks":           task_results,
+        "summary":         self._build_summary(task_results, aggregate),
+    }
 
     def grade_single_task(
         self,
