@@ -528,9 +528,9 @@ class ContentModerationEnv:
             return 0.0
 
         avg_reward = sum(self.episode_rewards) / len(self.episode_rewards)
-        # Final safety clip before returning to validator
-        return round(float(np.clip(avg_reward, 0.0, 1.0)), 4)
 
+        eps = 1e-4
+        return round(float(np.clip(avg_reward, eps, 1.0 - eps)), 4)
     def _compute_episode_metrics(self) -> Dict[str, Any]:
         """Generates a summary of performance at the end of an episode."""
         if not self.episode_info:
