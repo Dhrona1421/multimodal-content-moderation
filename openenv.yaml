@@ -84,7 +84,7 @@ tasks:
     expected_score_range: [0.0001, 0.9999]
     deterministic_grader: true
     grader:
-      module: grader.py
+      module: grader
       class: ModerationGrader
       score_key: score
       score_range: [0.0001, 0.9999]
@@ -94,7 +94,7 @@ tasks:
     expected_score_range: [0.0001, 0.9999]
     deterministic_grader: true
     grader:
-      module: grader.py
+      module: grader
       class: ModerationGrader
       score_key: score
       score_range: [0.0001, 0.9999]
@@ -104,12 +104,12 @@ tasks:
     expected_score_range: [0.0001, 0.9999]
     deterministic_grader: true
     grader:
-      module: grader.py
+      module: grader
       class: ModerationGrader
       score_key: score
       score_range: [0.0001, 0.9999]
 grader:
-  module: grader.py
+  module: grader
   class: ModerationGrader
   task_registry: tasks.py
   scoring:
