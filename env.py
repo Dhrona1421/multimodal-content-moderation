@@ -36,7 +36,6 @@ try:
         StepInfoModel,
     )
 except ImportError:
-    # Fallback for isolated validation environments
     FEATURE_DIM = 64
     ACTIONS = ["allow", "flag", "remove"]
 
@@ -63,7 +62,6 @@ except ImportError:
     class _CompatModel:
         def model_dump(self) -> Dict[str, Any]:
             return {k: _to_plain(v) for k, v in self.__dict__.items()}
-
         def dict(self) -> Dict[str, Any]:
             return self.model_dump()
 
@@ -76,13 +74,8 @@ except ImportError:
             self.escalated = int(kwargs.get("escalated", 0))
 
     class ActionModel(_CompatModel):
-        def __init__(
-            self,
-            action: str,
-            confidence: float = 1.0,
-            agent_reasoning: Optional[Dict[str, Any]] = None,
-            **_: Any,
-        ) -> None:
+        def __init__(self, action: str, confidence: float = 1.0,
+                     agent_reasoning: Optional[Dict[str, Any]] = None, **_: Any) -> None:
             action_value = str(action).strip().lower()
             if action_value not in ACTIONS:
                 raise ValueError(f"invalid action: {action_value}")
@@ -109,23 +102,30 @@ except ImportError:
             self.__dict__.update(kwargs)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# SCORE / REWARD CONSTANTS
+# Strictly open interval — validator rejects exactly 0.0 and exactly 1.0
+# ─────────────────────────────────────────────────────────────────────────────
+_SCORE_MIN  = 0.0001
+_SCORE_MAX  = 0.9999
+_REWARD_MIN = 0.0002   # slightly inside score bounds so avg stays off boundary
+_REWARD_MAX = 0.9998
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 1. REWARD CONFIGURATION & SEVERITY MATRIX
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Base reward matrix (correct_action, agent_action) → reward [0.0, 1.0]
 BASE_REWARD: Dict[Tuple[str, str], float] = {
-    ("allow",  "allow"):  1.00,
+    ("allow",  "allow"):  0.9998,   # capped below 1.0
     ("allow",  "flag"):   0.30,
     ("allow",  "remove"): 0.10,
-    ("flag",   "flag"):   1.00,
+    ("flag",   "flag"):   0.9998,
     ("flag",   "allow"):  0.05,
     ("flag",   "remove"): 0.70,
-    ("remove", "remove"): 1.00,
+    ("remove", "remove"): 0.9998,
     ("remove", "flag"):   0.70,
     ("remove", "allow"):  0.05,
 }
 
-# Severity multipliers (False Negatives on these result in higher penalties)
 SEVERITY: Dict[str, float] = {
     "nudity":     0.20,
     "violence":   0.25,
@@ -137,24 +137,11 @@ SEVERITY: Dict[str, float] = {
 CONF_THRESHOLD   = 0.45
 HIGH_RISK_IMAGES = {"nudity", "drugs", "violence"}
 
-# Score boundaries — strictly inside (0, 1), validator rejects 0.0 and 1.0
-_SCORE_MIN = 0.0001
-_SCORE_MAX = 0.9999
-
-# Reward boundaries — keep just inside [0, 1] so avg can never hit 0.0 or 1.0
-_REWARD_MIN = 0.0002
-_REWARD_MAX = 0.9998
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 2. MAIN ENVIRONMENT CLASS
 # ─────────────────────────────────────────────────────────────────────────────
 
 class ContentModerationEnv:
-    """
-    Advanced Multimodal Content Moderation Environment.
-    Implements the core logic for processing content, calculating rewards,
-    and managing state transitions.
-    """
 
     ACTIONS     = ACTIONS
     N_ACTIONS   = len(ACTIONS)
@@ -162,13 +149,13 @@ class ContentModerationEnv:
 
     def __init__(
         self,
-        dataset_path:   str            = "moderation_dataset.json",
-        task:           str            = "medium",
-        max_steps:      int            = 12,
-        seed:           Optional[int]  = None,
-        severity_scale: float          = 0.3,
-        calib_weight:   float          = 0.15,
-        enable_logging: bool           = False,
+        dataset_path:   str           = "moderation_dataset.json",
+        task:           str           = "medium",
+        max_steps:      int           = 12,
+        seed:           Optional[int] = None,
+        severity_scale: float         = 0.3,
+        calib_weight:   float         = 0.15,
+        enable_logging: bool          = False,
     ):
         self.dataset_path   = dataset_path
         self.task           = task
@@ -214,15 +201,13 @@ class ContentModerationEnv:
 
     def _build_task_pool(self) -> None:
         """
-        FIX: Use ISOLATED difficulty pools so easy/medium/hard tasks are
-        graded on their own posts only. The old cumulative approach
-        (hard = easy+medium+hard) was causing the grader to see mixed
-        difficulty posts and confusing the validator's task detection.
+        ISOLATED difficulty pools — each task only sees its own difficulty tier.
+        This is required for the validator to detect 3 separate graded tasks.
         """
         diff_map = {
             "easy":   {"easy"},
-            "medium": {"medium"},   # ← FIXED: was {"easy", "medium"}
-            "hard":   {"hard"},     # ← FIXED: was {"easy", "medium", "hard"}
+            "medium": {"medium"},
+            "hard":   {"hard"},
         }
         allowed = diff_map.get(self.task, {"easy", "medium", "hard"})
         self.task_pool = [
@@ -233,7 +218,7 @@ class ContentModerationEnv:
             self.task_pool = self.full_dataset
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 3. CORE API METHODS (state, reset, step)
+    # 3. CORE API METHODS
     # ─────────────────────────────────────────────────────────────────────────
 
     def state(self) -> Dict[str, Any]:
@@ -263,7 +248,6 @@ class ContentModerationEnv:
             self._materialize_post_variant(post, slot_idx)
             for slot_idx, post in enumerate(selected_posts)
         ]
-
         return self._build_obs(self.current_step)
 
     def step(
@@ -271,9 +255,9 @@ class ContentModerationEnv:
         action: Union[str, Dict[str, Any], ActionModel],
     ) -> Tuple[Dict[str, Any], float, bool, Dict[str, Any]]:
         if not self.episode_posts:
-            raise RuntimeError("Environment not initialized. Call reset() before step().")
+            raise RuntimeError("Call reset() before step().")
         if self.done:
-            raise RuntimeError("Episode already complete. Call reset() to start a new episode.")
+            raise RuntimeError("Episode complete. Call reset().")
 
         action_model    = self._coerce_action(action)
         action_str      = action_model.action
@@ -296,7 +280,7 @@ class ContentModerationEnv:
                 action_str, correct, image_tag, user_type, confidence, difficulty
             )
 
-        # ── FIX: Clamp reward to OPEN interval so avg never hits 0.0 or 1.0 ──
+        # ── Clamp reward to OPEN interval — never exactly 0.0 or 1.0 ──────
         reward = float(np.clip(raw_reward, _REWARD_MIN, _REWARD_MAX))
 
         is_correct = (action_str == correct) and not escalated
@@ -349,13 +333,13 @@ class ContentModerationEnv:
         return next_obs, reward, self.done, StepInfoModel(**info).model_dump()
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 4. REWARD ENGINE & MODIFIERS
+    # 4. REWARD ENGINE
     # ─────────────────────────────────────────────────────────────────────────
 
     def _calculate_complex_reward(
         self, action, correct, tag, utype, conf, diff
     ) -> float:
-        r = BASE_REWARD.get((correct, action), 0.0)
+        r = BASE_REWARD.get((correct, action), 0.0002)
 
         if action == "allow" and correct != "allow":
             sev_multiplier = SEVERITY.get(tag, 1.0)
@@ -376,16 +360,13 @@ class ContentModerationEnv:
         return r
 
     def _escalation_reward(self, difficulty: str) -> float:
-        rewards = {"easy": 0.05, "medium": 0.25, "hard": 0.45}
-        return rewards.get(difficulty, 0.20)
+        return {"easy": 0.05, "medium": 0.25, "hard": 0.45}.get(difficulty, 0.20)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 5. TEXT PERTURBATION & NOISE GENERATOR
+    # 5. TEXT PERTURBATION
     # ─────────────────────────────────────────────────────────────────────────
 
-    def _materialize_post_variant(
-        self, post: Dict[str, Any], slot_idx: int
-    ) -> Dict[str, Any]:
+    def _materialize_post_variant(self, post: Dict[str, Any], slot_idx: int) -> Dict[str, Any]:
         variant       = dict(post)
         txt           = str(post.get("text", ""))
         original_text = txt
@@ -454,13 +435,12 @@ class ContentModerationEnv:
         return noisy
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 6. OBSERVATION & METRICS
+    # 6. OBSERVATION & SCORING
     # ─────────────────────────────────────────────────────────────────────────
 
     def _build_obs(self, idx: int) -> Dict[str, Any]:
         post     = self.episode_posts[idx]
         hist_val = self._weighted_history(post["user_type"])
-
         obs = {
             "post_id":       post["id"],
             "text":          post["text"],
@@ -472,10 +452,8 @@ class ContentModerationEnv:
             "user_history":  hist_val,
             "session_stats": SessionStatsModel(**self.session_stats),
         }
-
         features        = extract_features(obs)
         obs["features"] = features.astype(np.float32).tolist()
-
         return ObservationModel(**obs).model_dump()
 
     def _weighted_history(self, user_type: str) -> float:
@@ -487,34 +465,28 @@ class ContentModerationEnv:
 
     def compute_score(self) -> float:
         """
-        FIX: Compute mean reward and clamp STRICTLY inside (0.0001, 0.9999).
+        Returns mean reward clamped STRICTLY inside (0.0001, 0.9999).
         The OpenEnv validator rejects scores of exactly 0.0 or exactly 1.0.
-        Using _REWARD_MIN/_REWARD_MAX in step() means avg is already inside
-        the open interval, but we clamp here as a final safety net too.
         """
         if not self.episode_rewards:
             return 0.5  # safe neutral — never exactly 0.0 or 1.0
 
-        avg_reward = sum(self.episode_rewards) / len(self.episode_rewards)
+        avg = sum(self.episode_rewards) / len(self.episode_rewards)
+        # _REWARD_MIN/_MAX already keep individual rewards off the boundary,
+        # but we clamp again here as a hard safety net.
+        score = round(float(np.clip(avg, _SCORE_MIN, _SCORE_MAX)), 4)
 
-        # Double-clamp: first to avoid float precision edge cases,
-        # then round to 4 decimal places.
-        clamped = float(np.clip(avg_reward, _SCORE_MIN, _SCORE_MAX))
-        score   = round(clamped, 4)
-
-        # Final hard guard — should never trigger, but never say never
+        # Absolute last-resort guard
         if score <= 0.0 or score >= 1.0:
-            score = float(np.clip(score, _SCORE_MIN, _SCORE_MAX))
+            score = _SCORE_MIN if score <= 0.0 else _SCORE_MAX
 
         return score
 
     def _compute_episode_metrics(self) -> Dict[str, Any]:
         if not self.episode_info:
             return {}
-
         correct_count = sum(1 for i in self.episode_info if i["is_correct"])
         esc_count     = sum(1 for i in self.episode_info if i["escalated"])
-
         return {
             "accuracy":            round(correct_count / self.max_steps, 4),
             "escalation_rate":     round(esc_count / self.max_steps, 4),
@@ -524,7 +496,7 @@ class ContentModerationEnv:
         }
 
     # ─────────────────────────────────────────────────────────────────────────
-    # 7. UTILITIES & CLASS PROPERTIES
+    # 7. UTILITIES
     # ─────────────────────────────────────────────────────────────────────────
 
     def _coerce_action(self, action: Any) -> ActionModel:
@@ -589,15 +561,14 @@ class ContentModerationEnv:
             f"W:{self.session_stats['wrong']} "
             f"E:{self.session_stats['escalated']}"
         )
-        return f"ModerationEnv {progress} | {stats} | Last Score: {self.compute_score()}"
+        return f"ModerationEnv {progress} | {stats} | Score: {self.compute_score()}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. VECTORISED ENVIRONMENT (HIGH-THROUGHPUT)
+# 8. VECTORISED ENVIRONMENT
 # ─────────────────────────────────────────────────────────────────────────────
 
 class VecContentModerationEnv:
-    """Synchronous Vectorized Wrapper for ContentModerationEnv."""
 
     def __init__(self, n_envs: int, **kwargs):
         self.n_envs  = n_envs
@@ -623,12 +594,11 @@ class VecContentModerationEnv:
         if confidences is None:
             confidences = [1.0] * self.n_envs
 
-        results   = []
+        results = []
         for i, env in enumerate(self.envs):
-            act  = actions[i]
-            conf = confidences[i]
+            act = actions[i]
             if not isinstance(act, (dict, ActionModel)):
-                act = {"action": act, "confidence": conf}
+                act = {"action": act, "confidence": confidences[i]}
             results.append(env.step(act))
 
         next_obs, rewards, dones, infos = [], [], [], []
@@ -652,26 +622,20 @@ class VecContentModerationEnv:
 # ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print(f"--- Initializing Moderation Environment v{ContentModerationEnv.API_VERSION} ---")
+    print(f"--- Moderation Environment v{ContentModerationEnv.API_VERSION} ---")
 
-    test_env    = ContentModerationEnv(task="hard", seed=42)
-    current_obs = test_env.reset()
+    for task_name in ["easy", "medium", "hard"]:
+        env = ContentModerationEnv(task=task_name, seed=42)
+        env.reset()
+        for _ in range(env.max_steps):
+            _, _, done, info = env.step({
+                "action": random.choice(ACTIONS),
+                "confidence": random.uniform(0.3, 1.0),
+            })
+            if done:
+                break
+        score = env.compute_score()
+        assert 0.0 < score < 1.0, f"Score out of range for {task_name}: {score}"
+        print(f"  {task_name}: score={score} ✅")
 
-    print(f"Task Pool Size: {len(test_env.task_pool)}")
-    print(f"Initial Observation Text: {current_obs['text'][:50]}...")
-
-    for s in range(test_env.max_steps):
-        random_action = random.choice(ACTIONS)
-        random_conf   = random.uniform(0.3, 1.0)
-        _, reward, done, info = test_env.step({
-            "action":           random_action,
-            "confidence":       random_conf,
-            "agent_reasoning":  "Random Testing",
-        })
-        print(f"Step {s+1}: Action={random_action:6} | Reward={reward:.4f} | Correct={info['is_correct']}")
-
-    final_score = test_env.compute_score()
-    print(f"Episode Complete. Final Score: {final_score}")
-    assert 0.0 < final_score < 1.0, f"Score out of range: {final_score}"
-    print("✅ Score strictly inside (0, 1) — validator will pass.")
-    print("-" * 50)
+    print("All scores strictly inside (0, 1) — validator will pass.")
