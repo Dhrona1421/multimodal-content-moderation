@@ -45,7 +45,7 @@ class ModerationGrader:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-   def grade_all_tasks(self, agent_fn: Callable) -> Dict[str, Any]:
+def grade_all_tasks(self, agent_fn: Callable) -> Dict[str, Any]:
     task_results: Dict[str, Dict] = {}
 
     for task_name in TASKS:
@@ -55,14 +55,12 @@ class ModerationGrader:
     aggregate = round(
         sum(t["score"] for t in task_results.values()) / len(task_results), 4
     )
-
-    # ✅ STRICT CLAMP (INSIDE FUNCTION)
     aggregate = min(max(float(aggregate), 0.0001), 0.9999)
 
     return {
         "aggregate_score": aggregate,
-        "tasks":           task_results,
-        "summary":         self._build_summary(task_results, aggregate),
+        "tasks": task_results,
+        "summary": self._build_summary(task_results, aggregate),
     }
 
     def grade_single_task(
