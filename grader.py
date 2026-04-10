@@ -53,12 +53,8 @@ class ModerationGrader:
 
         aggregate = round(
             sum(t["score"] for t in task_results.values()) / len(task_results), 4
-        )
-        return {
-            "aggregate_score": aggregate,
-            "tasks":           task_results,
-            "summary":         self._build_summary(task_results, aggregate),
-        }
+    )
+    aggregate = min(max(float(aggregate), 0.0001), 0.9999)
 
     def grade_single_task(
         self,
@@ -128,6 +124,7 @@ class ModerationGrader:
 
         n          = len(step_results)
         score      = env.compute_score()
+        score      = min(max(float(score), 0.0001), 0.9999)
         correct    = sum(1 for r in step_results if r["is_correct"])
         cm         = _confusion_matrix(y_true, y_pred, len(ACTIONS))
         clf_report = _classification_report(cm)
