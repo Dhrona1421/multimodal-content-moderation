@@ -77,8 +77,8 @@ observation:
     shape: [64]
     range: [0.0, 1.0]
 
-reward_range: [0.0, 1.0]
-score_range: [0.0, 1.0]
+reward_range: [0.0001, 0.9999]
+score_range: [0.0001, 0.9999]
 done_condition: step_count_equals_max_steps
 api_contract:
   reset: returns {observation, reward, done}
@@ -89,18 +89,18 @@ api_contract:
 tasks:
   easy:
     description: Obvious aligned moderation cases.
-    reward_range: [0.0, 1.0]
-    expected_score_range: [0.0, 1.0]
+    reward_range: [0.0001, 0.9999]
+    expected_score_range: [0.0001, 0.9999]
     deterministic_grader: true
   medium:
     description: Context-heavy moderation cases with ambiguity.
-    reward_range: [0.0, 1.0]
-    expected_score_range: [0.0, 1.0]
+    reward_range: [0.0001, 0.9999]
+    expected_score_range: [0.0001, 0.9999]
     deterministic_grader: true
   hard:
     description: Adversarial cross-modal moderation cases.
-    reward_range: [0.0, 1.0]
-    expected_score_range: [0.0, 1.0]
+    reward_range: [0.0001, 0.9999]
+    expected_score_range: [0.0001, 0.9999]
     deterministic_grader: true
 
 grader:
