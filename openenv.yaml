@@ -1,13 +1,11 @@
 name: multimodal-content-moderation
 version: "3.0.0"
 license: MIT
-
 description: >
   A real-world OpenEnv environment for multimodal social media content moderation.
   Agents review text, image safety tags, user trust signals, and session history to
   decide whether to allow, flag, or remove a post through a single standard action
   payload, while calibrating confidence for human escalation.
-
 tags:
   - openenv
   - content-moderation
@@ -15,15 +13,12 @@ tags:
   - reinforcement-learning
   - safety
   - trust-and-safety
-
 python_version: ">=3.11"
-
 models:
   observation: schemas.ObservationModel
   action: schemas.ActionModel
   reward: schemas.RewardModel
   info: schemas.StepInfoModel
-
 entry_points:
   environment: openenv_env:OpenEnvModerationEnv
   inference: inference.py
@@ -32,7 +27,6 @@ entry_points:
   api: api.py
   demo: app.py
   validation: validate_submission.py
-
 actions:
   type: object
   required: [action]
@@ -45,7 +39,6 @@ actions:
       range: [0.0, 1.0]
       default: 1.0
       escalation_below: 0.45
-
 observation:
   post_id:
     type: integer
@@ -76,7 +69,6 @@ observation:
     type: array
     shape: [64]
     range: [0.0, 1.0]
-
 reward_range: [0.0001, 0.9999]
 score_range: [0.0001, 0.9999]
 done_condition: step_count_equals_max_steps
@@ -85,32 +77,46 @@ api_contract:
   state: returns current observation without advancing, or {}
   step: accepts ActionModel-compatible payload (canonical or flat) and returns {observation, reward, done}
   session: supports env_id in body/query/header, lazy session creation, and /close lifecycle endpoint
-
 tasks:
   easy:
     description: Obvious aligned moderation cases.
     reward_range: [0.0001, 0.9999]
     expected_score_range: [0.0001, 0.9999]
     deterministic_grader: true
+    grader:
+      module: grader.py
+      class: ModerationGrader
+      score_key: score
+      score_range: [0.0001, 0.9999]
   medium:
     description: Context-heavy moderation cases with ambiguity.
     reward_range: [0.0001, 0.9999]
     expected_score_range: [0.0001, 0.9999]
     deterministic_grader: true
+    grader:
+      module: grader.py
+      class: ModerationGrader
+      score_key: score
+      score_range: [0.0001, 0.9999]
   hard:
     description: Adversarial cross-modal moderation cases.
     reward_range: [0.0001, 0.9999]
     expected_score_range: [0.0001, 0.9999]
     deterministic_grader: true
-
+    grader:
+      module: grader.py
+      class: ModerationGrader
+      score_key: score
+      score_range: [0.0001, 0.9999]
 grader:
   module: grader.py
+  class: ModerationGrader
   task_registry: tasks.py
   scoring:
     primary: aggregate_score
     per_task: score
+    score_range: [0.0001, 0.9999]
     deterministic: true
-
 baseline:
   script: inference.py
   command: python inference.py --task hard --agent llm --seed 42 --max-steps 12
@@ -122,7 +128,6 @@ baseline:
     - OPENAI_API_KEY
     - LOCAL_IMAGE_NAME
     - OPENENV_API_ONLY
-
 dependencies:
   required:
     - numpy>=1.24.0
@@ -136,11 +141,9 @@ dependencies:
     - matplotlib>=3.7.0
   optional:
     - torch>=2.0.0
-
 deployment:
   dockerfile: Dockerfile
   hf_space_sdk: docker
   port: 7860
-
 validation:
   local_smoke_script: validate_submission.py
