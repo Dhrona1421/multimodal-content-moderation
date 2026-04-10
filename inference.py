@@ -112,10 +112,18 @@ SYSTEM_PROMPT = (
 
 # ── OpenAI client (optional) ──────────────────────────────────────────────────
 def _build_client() -> Optional[Any]:
-    if not _OPENAI_AVAILABLE or not HF_TOKEN:
+    if not _OPENAI_AVAILABLE:
         return None
+
+    api_key = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
+    base_url = os.getenv("API_BASE_URL", API_BASE_URL)
+
+    if not api_key:
+        _debug("No API key found for LLM client")
+        return None
+
     try:
-        return OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
+        return OpenAI(base_url=base_url, api_key=api_key)
     except Exception as exc:
         _debug(f"OpenAI client init failed: {exc}")
         return None
