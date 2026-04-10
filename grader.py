@@ -38,30 +38,29 @@ class ModerationGrader:
     def __init__(
         self,
         dataset_path: str = "moderation_dataset.json",
-        seed:         int = 42,
+        seed: int = 42,
     ):
         self.dataset_path = dataset_path
-        self.seed         = seed
+        self.seed = seed
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    # ✅ NOW INSIDE CLASS
+    def grade_all_tasks(self, agent_fn: Callable) -> Dict[str, Any]:
+        task_results: Dict[str, Dict] = {}
 
-def grade_all_tasks(self, agent_fn: Callable) -> Dict[str, Any]:
-    task_results: Dict[str, Dict] = {}
+        for task_name in TASKS:
+            env = make_task(task_name, self.dataset_path, self.seed)
+            task_results[task_name] = self._run_task(env, task_name, agent_fn)
 
-    for task_name in TASKS:
-        env = make_task(task_name, self.dataset_path, self.seed)
-        task_results[task_name] = self._run_task(env, task_name, agent_fn)
+        aggregate = round(
+            sum(t["score"] for t in task_results.values()) / len(task_results), 4
+        )
+        aggregate = min(max(float(aggregate), 0.0001), 0.9999)
 
-    aggregate = round(
-        sum(t["score"] for t in task_results.values()) / len(task_results), 4
-    )
-    aggregate = min(max(float(aggregate), 0.0001), 0.9999)
-
-    return {
-        "aggregate_score": aggregate,
-        "tasks": task_results,
-        "summary": self._build_summary(task_results, aggregate),
-    }
+        return {
+            "aggregate_score": aggregate,
+            "tasks": task_results,
+            "summary": self._build_summary(task_results, aggregate),
+        }
 
     def grade_single_task(
         self,
