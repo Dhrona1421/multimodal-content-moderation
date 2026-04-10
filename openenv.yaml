@@ -113,7 +113,7 @@ grader:
 
 baseline:
   script: inference.py
-  command: python inference.py --task hard --rule-based --seed 42 --max-steps 12
+  command: python inference.py --task hard --agent llm --seed 42 --max-steps 12
   reproducible: true
   env_vars:
     - API_BASE_URL
