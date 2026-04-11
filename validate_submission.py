@@ -52,7 +52,7 @@ def check_tasks() -> None:
     reports = run_inference(force_rule_based=True, verbose=False)
     for task_name, result in reports["Rule-Based"]["tasks"].items():
         score = result["score"]
-        _assert(0.0 <= score <= 1.0, f"{task_name} score must be in [0.0, 1.0]")
+        _assert(0.0 <= score <= 1.0, f"{task_name} score must be in [0.111, 0.999]")
 
 
 def check_files() -> None:
