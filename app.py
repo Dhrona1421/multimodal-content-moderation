@@ -145,8 +145,8 @@ class ResetResponseModel(BaseModel):
 
 class StepResponseModel(BaseModel):
     observation: Dict[str, Any]
-    reward: Optional[float] = None
-    done: bool = False
+    reward: float
+    done: bool
 
 
 class CloseSessionRequest(BaseModel):
@@ -1276,7 +1276,16 @@ def create_app(api_only: Optional[bool] = None) -> FastAPI:
             "license": "MIT",
             "mode": "simulation",
             "tags": ["openenv", "content-moderation", "multimodal", "safety"],
-            "tasks": list(TASKS.keys()),
+            "tasks": [
+                {
+                    "name": t,
+                    "grader": {
+                        "type": "ModerationGrader",
+                        "score_range": [0.0001, 0.9999]
+                    }
+                }
+                for t in TASKS.keys()
+            ],
             "ui_enabled": ui_enabled,
             "llm_available": LLM_AVAILABLE,
             "session_transport": {
@@ -1367,7 +1376,11 @@ def create_app(api_only: Optional[bool] = None) -> FastAPI:
             env_id=session_id,
         )
         response.headers["X-Env-Id"] = env_id
-        return ResetResponseModel(observation=observation, reward=None, done=False)
+        return ResetResponseModel(
+            observation=observation, 
+            reward=0.0001, 
+            done=False
+        )
 
     @api.get("/state")
     @api.post("/state")
@@ -1391,36 +1404,51 @@ def create_app(api_only: Optional[bool] = None) -> FastAPI:
             "closed": closed,
         }
 
-    @api.post("/step", response_model=StepResponseModel)
-    def step_environment(
-        response: Response,
-        action: Dict[str, Any] = Body(default_factory=dict),
-        env_id: Optional[str] = Query(default=None),
-        x_env_id: Optional[str] = Header(default=None, alias="X-Env-Id"),
-    ) -> StepResponseModel:
-        try:
-            payload, body_env_id = _normalize_step_payload(action)
-            resolved_env_id = body_env_id or env_id or x_env_id
-            if resolved_env_id and str(resolved_env_id).strip().lower() in {"new", "auto"}:
-                resolved_env_id = f"session-{uuid.uuid4().hex[:12]}"
-            result = ENV_SERVICE.step(payload, env_id=resolved_env_id)
-            resolved_header_env_id = (
-                str(resolved_env_id).strip() if resolved_env_id else EnvService.DEFAULT_ENV_ID
-            )
-            response.headers["X-Env-Id"] = resolved_header_env_id or EnvService.DEFAULT_ENV_ID
-            return StepResponseModel(
-                observation=result["observation"],
-                reward=result["reward"],
-                done=result["done"],
-            )
-        except ValidationError as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.errors()) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+@api.post("/step", response_model=StepResponseModel)
+def step_environment(
+    response: Response,
+    action: Dict[str, Any] = Body(default_factory=dict),
+    env_id: Optional[str] = Query(default=None),
+    x_env_id: Optional[str] = Header(default=None, alias="X-Env-Id"),
+) -> StepResponseModel:
+    try:
+        payload, body_env_id = _normalize_step_payload(action)
+        resolved_env_id = body_env_id or env_id or x_env_id
+
+        if resolved_env_id and str(resolved_env_id).strip().lower() in {"new", "auto"}:
+            resolved_env_id = f"session-{uuid.uuid4().hex[:12]}"
+
+        result = ENV_SERVICE.step(payload, env_id=resolved_env_id)
+
+        resolved_header_env_id = (
+            str(resolved_env_id).strip() if resolved_env_id else EnvService.DEFAULT_ENV_ID
+        )
+        response.headers["X-Env-Id"] = resolved_header_env_id or EnvService.DEFAULT_ENV_ID
+
+        # ✅ FIX: Clamp reward strictly inside (0, 1)
+        reward = result["reward"]
+
+        if reward is None:
+            reward = 0.0001
+        elif reward <= 0.0:
+            reward = 0.0001
+        elif reward >= 1.0:
+            reward = 0.9999
+
+        return StepResponseModel(
+            observation=result["observation"],
+            reward=reward,
+            done=result["done"],
+        )
+
+    except ValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=exc.errors()) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
 
     if api_only or gr is None or ui is None:
         return api
